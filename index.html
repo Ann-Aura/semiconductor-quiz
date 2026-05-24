@@ -109,6 +109,10 @@
               <button class="medium" onclick="selfEval('medium')">🤔 模糊</button>
               <button class="hard" onclick="selfEval('hard')">😵 不会</button>
             </div>
+            <div class="nav-buttons" style="margin-top:16px">
+              <button onclick="navigate(-1)">◀ 上一题</button>
+              <button onclick="navigate(1)">下一题 ▶</button>
+            </div>
           </div>
         </div>
       </div>
@@ -182,6 +186,7 @@
         <button class="settings-action-btn" onclick="exportData()">📤 导出学习数据</button>
         <button class="settings-action-btn" onclick="document.getElementById('importInput').click()">📥 导入学习数据</button>
         <input type="file" id="importInput" accept=".json" style="display:none" onchange="importData(event)">
+        <button class="settings-action-btn" onclick="resetData()" style="border-color:var(--danger);color:var(--danger);margin-top:8px">🗑️ 一键重置</button>
         <p style="font-size:.8em;color:var(--text2);margin-top:8px">导出后换设备或重装时可导入恢复数据</p>
       </div>
     </div>
@@ -774,6 +779,14 @@ function importData(event) {
   };
   reader.readAsText(file);
   event.target.value = '';
+}
+
+function resetData() {
+  if (!confirm('⚠️ 确定要重置所有学习数据吗？\n\n此操作将清除：\n· 所有答题记录\n· XP 经验值和等级\n· 成就和错题本\n· 学习日历和统计数据\n\n建议先导出数据备份！')) return;
+  if (!confirm('🚨 再次确认：重置后将丢失全部学习进度，此操作不可撤销！\n\n确定要继续吗？')) return;
+  localStorage.removeItem('semiquiz_data');
+  showToast('🗑️ 数据已重置，即将刷新页面');
+  setTimeout(() => location.reload(), 1000);
 }
 
 document.addEventListener('keydown', function(e) {
