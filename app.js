@@ -2272,6 +2272,16 @@ function bindEvents() {
     if (action === "go-backup") showView("backup");
     if (action === "go-config") showView("config");
     if (action === "continue-practice") restorePracticeSession();
+    if (action === "toggle-version-card") {
+      const card = $("#versionCard");
+      const expanded = target.getAttribute("aria-expanded") === "true";
+      if (card) card.hidden = expanded;
+      target.setAttribute("aria-expanded", String(!expanded));
+      target.title = expanded ? "展开版本与更新" : "收起版本与更新";
+      const label = target.querySelector(".sr-only");
+      if (label) label.textContent = target.title;
+      return;
+    }
     if (action === "set-theme") setTheme(target.dataset.theme);
     if (action === "start-chapter") startChapterPractice(Number(target.dataset.chapter), target.dataset.mode);
     if (action === "back-practice") showView(state.practice?.returnView || "chapter");

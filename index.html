@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>半导体器件物理 · 刷题</title>
-  <link rel="stylesheet" href="style.css?v=20260628-sidebar-version">
+  <link rel="stylesheet" href="style.css?v=20260628-version-toggle">
   </head>
   <body>
     <button class="mobile-menu-button" id="mobileMenuButton" aria-label="展开导航">☰</button>
@@ -29,47 +29,64 @@
           <button class="nav-button" data-view="config">AI 配置</button>
         </nav>
 
-        <section class="version-card" aria-label="版本与更新">
-          <div class="version-card-head">
-            <span>当前版本</span>
-            <strong>v2026.06.28</strong>
+        <div class="sidebar-bottom">
+          <div class="stats-toolbar">
+            <span>学习概览</span>
+            <button
+              class="version-toggle"
+              data-action="toggle-version-card"
+              aria-controls="versionCard"
+              aria-expanded="false"
+              title="展开版本与更新"
+            >
+              <span class="eye-open" aria-hidden="true">◉</span>
+              <span class="eye-closed" aria-hidden="true">—</span>
+              <span class="sr-only">展开版本与更新</span>
+            </button>
           </div>
-          <p>保研面试题库版 · 选择题追问 + 原题卡片双轨复习</p>
-          <div class="feature-pills" aria-label="已有功能">
-            <span>章节刷题</span>
-            <span>随机考试</span>
-            <span>错题收藏</span>
-            <span>AI 追问</span>
-            <span>Gist 备份</span>
-            <span>续练恢复</span>
-          </div>
-          <div class="update-note">
-            <span>此次更新</span>
-            <ul>
-              <li>翻转卡片恢复原题库题干与短答</li>
-              <li>AI 解析按选择题/卡片模式分开</li>
-              <li>首页继续答题入口与导航修复</li>
-            </ul>
-          </div>
-        </section>
 
-        <div class="mini-stats">
-          <div>
-            <span id="statTotal">0</span>
-            <small>总题数</small>
+          <div class="mini-stats">
+            <div>
+              <span id="statTotal">0</span>
+              <small>总题数</small>
+            </div>
+            <div>
+              <span id="statMistakes">0</span>
+              <small>错题</small>
+            </div>
+            <div>
+              <span id="statFavorites">0</span>
+              <small>收藏</small>
+            </div>
+            <div>
+              <span id="statLevel">Lv.1</span>
+              <small>等级</small>
+            </div>
           </div>
-          <div>
-            <span id="statMistakes">0</span>
-            <small>错题</small>
-          </div>
-          <div>
-            <span id="statFavorites">0</span>
-            <small>收藏</small>
-          </div>
-          <div>
-            <span id="statLevel">Lv.1</span>
-            <small>等级</small>
-          </div>
+
+          <section class="version-card" id="versionCard" aria-label="版本与更新" hidden>
+            <div class="version-card-head">
+              <span>当前版本</span>
+              <strong>v2026.06.28</strong>
+            </div>
+            <p>保研面试题库版 · 选择题追问 + 原题卡片双轨复习</p>
+            <div class="feature-pills" aria-label="已有功能">
+              <span>章节刷题</span>
+              <span>随机考试</span>
+              <span>错题收藏</span>
+              <span>AI 追问</span>
+              <span>Gist 备份</span>
+              <span>续练恢复</span>
+            </div>
+            <div class="update-note">
+              <span>此次更新</span>
+              <ul>
+                <li>翻转卡片恢复原题库题干与短答</li>
+                <li>AI 解析按选择题/卡片模式分开</li>
+                <li>首页继续答题入口与导航修复</li>
+              </ul>
+            </div>
+          </section>
         </div>
       </aside>
 
@@ -90,7 +107,7 @@
     <input class="hidden-file" id="backupFile" type="file" accept="application/json,.json">
     <div class="toast" id="toast"></div>
 
-  <script src="data/questions.js?v=20260628-sidebar-version"></script>
-  <script src="app.js?v=20260628-sidebar-version"></script>
+  <script src="data/questions.js?v=20260628-version-toggle"></script>
+  <script src="app.js?v=20260628-version-toggle"></script>
   </body>
 </html>
