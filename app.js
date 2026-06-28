@@ -2197,6 +2197,11 @@ function spawnConfetti() {
 
 function bindEvents() {
   document.addEventListener("click", (event) => {
+    const navButton = event.target.closest(".nav-button[data-view]");
+    if (navButton) {
+      showView(navButton.dataset.view);
+      return;
+    }
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
