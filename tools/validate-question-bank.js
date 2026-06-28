@@ -50,6 +50,8 @@ questions.forEach((question, index) => {
   if (!Number.isInteger(question.correct) || question.correct < 0 || question.correct > 3) fail(`${prefix}: invalid correct index.`);
   if (!question.short_answer) fail(`${prefix}: missing short_answer.`);
   if (question.options?.[question.correct] !== question.short_answer) fail(`${prefix}: correct option must equal short_answer.`);
+  if (!question.card_question) fail(`${prefix}: missing card_question.`);
+  if (!question.card_answer) fail(`${prefix}: missing card_answer.`);
   if (new Set((question.options || []).map(clean)).size !== 4) fail(`${prefix}: duplicate options.`);
   if (!Array.isArray(question.interview_points) || question.interview_points.length < 3 || question.interview_points.length > 5) {
     fail(`${prefix}: interview_points must contain 3-5 items.`);

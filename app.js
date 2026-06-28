@@ -89,11 +89,13 @@ function normalizeQuestion(raw) {
     chapter: Number(raw.chapter) || 0,
     chapterName: raw.chapter_name || `第 ${raw.chapter || ""} 章`,
     question: raw.question_text || raw.question || "",
+    cardQuestion: raw.card_question || raw.original_question_text || raw.question_text || raw.question || "",
     options: Array.isArray(raw.options) ? raw.options : [],
     correct: Number.isFinite(correct) ? correct : 0,
     formula: raw.formula || "",
     explanation: raw.explanation || "",
     shortAnswer: raw.short_answer || raw.explanation || "",
+    cardAnswer: raw.card_answer || raw.original_short_answer || raw.short_answer || raw.explanation || "",
     interviewPoints: Array.isArray(raw.interview_points) ? raw.interview_points.filter((point) => typeof point === "string") : [],
     tags: Array.isArray(raw.tags) ? raw.tags : [],
   };
@@ -744,17 +746,19 @@ function renderChoiceQuestion(question, record) {
 }
 
 function renderFlipQuestion(question, record) {
+  const cardQuestion = question.cardQuestion || question.question;
+  const cardAnswer = question.cardAnswer || question.shortAnswer || question.options[question.correct] || "";
   return `
     <div class="flip-card ${state.practice.flipped ? "flipped" : ""}" id="flipCard">
       <div class="flip-card-inner">
         <div class="flip-card-front">
           <div class="question-top"><span>第 ${question.chapter} 章</span><span>${escapeHtml(question.chapterName)}</span></div>
-          <h3 class="question-title">${escapeHtml(question.question)}</h3>
+          <h3 class="question-title">${escapeHtml(cardQuestion)}</h3>
           <div class="flip-hint" data-action="flip-card">点击翻转 · 查看答案</div>
         </div>
         <div class="flip-card-back">
           <div class="answer-label">答案要点</div>
-          <div class="answer-text">${escapeHtml(question.shortAnswer || question.options[question.correct] || "")}</div>
+          <div class="answer-text">${escapeHtml(cardAnswer)}</div>
           ${question.formula ? `<div class="formula-box">${escapeHtml(question.formula)}</div>` : ""}
           <p>${escapeHtml(question.explanation)}</p>
           ${renderInterviewPoints(question)}
@@ -1183,7 +1187,18 @@ function searchQuestions(query) {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return questions.filter((q) => {
-    const searchable = [q.question, q.explanation, q.formula, q.shortAnswer, q.chapterName, ...(q.tags || []), ...(q.interviewPoints || []), ...q.options]
+    const searchable = [
+      q.question,
+      q.cardQuestion,
+      q.explanation,
+      q.formula,
+      q.shortAnswer,
+      q.cardAnswer,
+      q.chapterName,
+      ...(q.tags || []),
+      ...(q.interviewPoints || []),
+      ...q.options,
+    ]
       .join(" ")
       .toLocaleLowerCase();
     return terms.every((term) => searchable.includes(term));
@@ -1813,11 +1828,12 @@ function buildPrompt(question, userAnswer) {
 
 课程：半导体器件物理
 章节：${question.chapterName}
-题目：${question.question}
+选择题题目：${question.question}
 选择题选项：
 ${options}
 选择题正确选项：${correctLabel(question)}. ${question.options[question.correct] || ""}
-简答标准答案：${question.shortAnswer || question.options[question.correct] || "无"}
+原卡片题目：${question.cardQuestion || question.question || "无"}
+原卡片简答答案：${question.cardAnswer || question.shortAnswer || question.options[question.correct] || "无"}
 公式：${question.formula || "无"}
 题库解析：${question.explanation || "无"}
 面试口答要点：
@@ -1845,11 +1861,12 @@ function buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, 
 
 课程：半导体器件物理
 章节：${question.chapterName}
-题目：${question.question}
+选择题题目：${question.question}
 选择题选项：
 ${options}
 选择题正确选项：${correctLabel(question)}. ${question.options[question.correct] || ""}
-简答标准答案：${question.shortAnswer || question.options[question.correct] || "无"}
+原卡片题目：${question.cardQuestion || question.question || "无"}
+原卡片简答答案：${question.cardAnswer || question.shortAnswer || question.options[question.correct] || "无"}
 公式：${question.formula || "无"}
 题库解析：${question.explanation || "无"}
 面试口答要点：

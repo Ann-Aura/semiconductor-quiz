@@ -93,6 +93,13 @@ semiconductor_quiz/
 
 ## 最近修改记录
 
+### 2026-06-28（恢复原题库卡片内容）
+
+1. **补回原始卡片题干与答案** - 从初始题库按题号恢复 `card_question` 和 `card_answer`，用于翻转卡片模式；选择题仍保留保研面试追问题干、选项和口答要点。
+2. **选择题与卡片双轨显示** - 选择题模式继续使用 `question_text/options/short_answer`；翻转卡片正面使用 `card_question`，背面使用 `card_answer`，公式、解析和面试口答要点继续辅助复习。
+3. **AI 上下文区分题型** - AI prompt 同时携带选择题题目和原卡片题目/答案，避免把选择题选项当成唯一简答材料。
+4. **校验工具加防线** - `tools/validate-question-bank.js` 新增 `card_question/card_answer` 必填检查，防止后续题库重写再次覆盖卡片内容。
+
 ### 2026-06-28（刷题续练 + 面试式 AI 解析 + Markdown 渲染）
 
 1. **新增练习会话续练** - 新增 `semiquiz-practice-session-v1`，保存当前练习标题、题目 ID、题号、模式、翻转状态、答题记录和返回页面；刷新或退出后可从首页及章节/错题/收藏/搜索页继续上次练习。
