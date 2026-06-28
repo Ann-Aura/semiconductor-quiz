@@ -32,6 +32,7 @@ const state = {
   aiExpanded: {},
   backupMessage: "",
   configMessage: "",
+  backupInFlight: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -1162,6 +1163,17 @@ function renderBackup() {
           <div class="field"><label for="backupGistId">Gist ID</label><input id="backupGistId" value="${escapeAttr(config.gistId)}" placeholder="首次备份后自动生成"></div>
           <div class="field"><label for="backupFilename">文件名</label><input id="backupFilename" value="${escapeAttr(config.filename)}"></div>
         </div>
+        <div class="auto-backup-box">
+          <label class="checkbox-field" for="backupAutoEnabled">
+            <input id="backupAutoEnabled" type="checkbox" ${config.autoEnabled ? "checked" : ""}>
+            <span>启用自动备份</span>
+          </label>
+          <div class="field">
+            <label for="backupAutoInterval">自动备份间隔（分钟）</label>
+            <input id="backupAutoInterval" type="number" min="5" max="1440" step="5" value="${config.autoIntervalMinutes}">
+          </div>
+          <p class="muted">${autoBackupSummary(config)}</p>
+        </div>
         <div class="answer-actions" style="margin-top:14px">
           <button class="button secondary" data-action="save-backup-config">保存 GitHub 配置</button>
           <button class="button" data-action="backup-to-github">备份到 GitHub</button>
@@ -1222,7 +1234,43 @@ function getBackupConfig() {
     token: typeof saved.token === "string" ? saved.token : "",
     gistId: typeof saved.gistId === "string" ? saved.gistId : "",
     filename: typeof saved.filename === "string" && saved.filename ? saved.filename : BACKUP_FILENAME,
+    autoEnabled: saved.autoEnabled === true,
+    autoIntervalMinutes: normalizeAutoBackupInterval(saved.autoIntervalMinutes),
+    lastAutoBackupAt: typeof saved.lastAutoBackupAt === "string" ? saved.lastAutoBackupAt : "",
+    lastAutoBackupStatus: typeof saved.lastAutoBackupStatus === "string" ? saved.lastAutoBackupStatus : "",
   };
+}
+
+function normalizeAutoBackupInterval(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) return 30;
+  return Math.max(5, Math.min(1440, Math.round(minutes)));
+}
+
+function formatLocalTime(isoValue) {
+  if (!isoValue) return "";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function nextAutoBackupAt(config) {
+  if (!config.autoEnabled || !config.lastAutoBackupAt) return "";
+  const last = new Date(config.lastAutoBackupAt).getTime();
+  if (Number.isNaN(last)) return "";
+  return new Date(last + config.autoIntervalMinutes * 60 * 1000).toISOString();
+}
+
+function autoBackupSummary(config) {
+  if (!config.autoEnabled) return `自动备份未启用。启用后默认每 ${config.autoIntervalMinutes || 30} 分钟备份一次。`;
+  const parts = [`已启用，每 ${config.autoIntervalMinutes} 分钟自动备份一次`];
+  const last = formatLocalTime(config.lastAutoBackupAt);
+  const next = formatLocalTime(nextAutoBackupAt(config));
+  if (last) parts.push(`上次：${last}`);
+  if (next) parts.push(`下次预计：${next}`);
+  if (config.lastAutoBackupStatus) parts.push(`状态：${config.lastAutoBackupStatus}`);
+  if (!config.token) parts.push("请先填写 GitHub token，否则自动备份会跳过");
+  return parts.join("；") + "。";
 }
 
 function saveBackupConfig(config) {
@@ -1235,6 +1283,10 @@ function readBackupForm() {
     token: $("#backupToken")?.value || current.token,
     gistId: ($("#backupGistId")?.value || current.gistId).trim(),
     filename: ($("#backupFilename")?.value || current.filename || BACKUP_FILENAME).trim(),
+    autoEnabled: Boolean($("#backupAutoEnabled")?.checked),
+    autoIntervalMinutes: normalizeAutoBackupInterval($("#backupAutoInterval")?.value || current.autoIntervalMinutes),
+    lastAutoBackupAt: current.lastAutoBackupAt,
+    lastAutoBackupStatus: current.lastAutoBackupStatus,
   };
 }
 
@@ -1256,11 +1308,32 @@ async function githubErrorMessage(response, actionName) {
   return `${actionName}失败：HTTP ${response.status}${detail}`;
 }
 
-async function backupToGithub() {
-  const config = readBackupForm();
+function renderBackupIfActive() {
+  if ($("#backupView")?.classList.contains("active-view")) renderBackup();
+}
+
+function markAutoBackupAttempt(config, status) {
+  saveBackupConfig({
+    ...config,
+    lastAutoBackupAt: new Date().toISOString(),
+    lastAutoBackupStatus: status,
+  });
+}
+
+async function backupToGithub(options = {}) {
+  if (state.backupInFlight) {
+    if (!options.auto) {
+      state.backupMessage = "已有备份正在进行，请稍后再试。";
+      renderBackupIfActive();
+    }
+    return;
+  }
+  const config = options.config || (options.auto ? getBackupConfig() : readBackupForm());
   if (!config.token) {
-    state.backupMessage = "请先填写 GitHub token。";
-    renderBackup();
+    const message = options.auto ? "自动备份跳过：请先填写 GitHub token。" : "请先填写 GitHub token。";
+    state.backupMessage = message;
+    if (options.auto) markAutoBackupAttempt(config, message);
+    renderBackupIfActive();
     return;
   }
   const filename = config.filename || BACKUP_FILENAME;
@@ -1269,19 +1342,31 @@ async function backupToGithub() {
     public: false,
     files: { [filename]: { content: JSON.stringify(buildBackupPayload(), null, 2) } },
   };
-  state.backupMessage = "正在备份到 GitHub...";
-  renderBackup();
+  state.backupInFlight = true;
+  state.backupMessage = options.auto ? "正在自动备份到 GitHub..." : "正在备份到 GitHub...";
+  renderBackupIfActive();
   try {
     const url = config.gistId ? `https://api.github.com/gists/${config.gistId}` : "https://api.github.com/gists";
     const response = await fetch(url, { method: config.gistId ? "PATCH" : "POST", headers: githubHeaders(config.token), body: JSON.stringify(body) });
     if (!response.ok) throw new Error(await githubErrorMessage(response, "GitHub 备份"));
     const gist = await response.json();
-    saveBackupConfig({ ...config, gistId: gist.id, filename });
-    state.backupMessage = `已备份到 GitHub Gist：${gist.id}`;
+    const successMessage = options.auto ? `自动备份成功：${gist.id}` : `已备份到 GitHub Gist：${gist.id}`;
+    saveBackupConfig({
+      ...config,
+      gistId: gist.id,
+      filename,
+      lastAutoBackupAt: options.auto ? new Date().toISOString() : config.lastAutoBackupAt,
+      lastAutoBackupStatus: options.auto ? successMessage : config.lastAutoBackupStatus,
+    });
+    state.backupMessage = successMessage;
   } catch (error) {
-    state.backupMessage = explainNetworkError(error);
+    const message = explainNetworkError(error);
+    state.backupMessage = options.auto ? `自动备份失败：${message}` : message;
+    if (options.auto) markAutoBackupAttempt(config, state.backupMessage);
+  } finally {
+    state.backupInFlight = false;
   }
-  renderBackup();
+  renderBackupIfActive();
 }
 
 async function restoreFromGithub() {
@@ -1726,7 +1811,16 @@ function bindEvents() {
     }
     if (action === "export-backup") exportBackupFile();
     if (action === "save-backup-config") {
-      saveBackupConfig(readBackupForm());
+      const previous = getBackupConfig();
+      const next = readBackupForm();
+      if (next.autoEnabled && !previous.autoEnabled && !next.lastAutoBackupAt) {
+        next.lastAutoBackupAt = new Date().toISOString();
+        next.lastAutoBackupStatus = "自动备份已启用，等待下次到点执行";
+      }
+      if (!next.autoEnabled) {
+        next.lastAutoBackupStatus = previous.lastAutoBackupStatus;
+      }
+      saveBackupConfig(next);
       state.backupMessage = "GitHub 配置已保存。";
       renderBackup();
     }
@@ -1779,12 +1873,32 @@ function bindEvents() {
   document.querySelectorAll(".nav-button").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
 }
 
+function autoBackupDue(config) {
+  if (!config.autoEnabled) return false;
+  if (!config.lastAutoBackupAt) return true;
+  const last = new Date(config.lastAutoBackupAt).getTime();
+  if (Number.isNaN(last)) return true;
+  return Date.now() - last >= config.autoIntervalMinutes * 60 * 1000;
+}
+
+async function runAutoBackupIfDue() {
+  const config = getBackupConfig();
+  if (!autoBackupDue(config) || state.backupInFlight) return;
+  if (!config.token) {
+    markAutoBackupAttempt(config, "自动备份跳过：请先填写 GitHub token");
+    renderBackupIfActive();
+    return;
+  }
+  await backupToGithub({ auto: true, config });
+}
+
 setInterval(() => {
   if (progress.studyLog[todayStr]) {
     progress.studyLog[todayStr].time = (progress.studyLog[todayStr].time || 0) + 1;
     saveProgress();
     if (state.view === "home") renderHome();
   }
+  runAutoBackupIfDue();
 }, 60000);
 
 init();
