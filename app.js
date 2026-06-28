@@ -4,6 +4,8 @@ const STORAGE = {
   favorites: "semiquiz-favorites-v2",
   aiConfig: "semiquiz-ai-config-v2",
   aiCache: "semiquiz-ai-cache-v2",
+  aiChats: "semiquiz-ai-chats-v1",
+  practiceSession: "semiquiz-practice-session-v1",
   backupConfig: "semiquiz-backup-config-v2",
   theme: "semiquiz-theme-v2",
 };
@@ -12,6 +14,9 @@ const BACKUP_FILENAME = "semiconductor-quiz-backup.json";
 const LEGACY_DATA_KEY = "semiquiz_data";
 const LEGACY_THEME_KEY = "semiquiz_theme";
 const LABELS = ["A", "B", "C", "D", "E", "F"];
+const DEFAULT_AI_CUSTOM_PROMPT =
+  "先判断选择题：说明正确选项为什么对、错误选项错在哪里；再给出保研面试 30-60 秒口答框架；最后给记忆抓手、近似条件、适用范围和易错点。";
+const FOLLOWUP_SUGGESTIONS = ["为什么选这个？", "公式怎么理解？", "考试怎么写？", "举个物理图像例子", "我还是没懂"];
 
 let questions = [];
 let chapters = [];
@@ -30,6 +35,8 @@ const state = {
   reviewFilter: "all",
   aiStatus: {},
   aiExpanded: {},
+  aiFollowupDrafts: {},
+  aiFollowupLoading: {},
   backupMessage: "",
   configMessage: "",
   backupInFlight: false,
@@ -87,6 +94,7 @@ function normalizeQuestion(raw) {
     formula: raw.formula || "",
     explanation: raw.explanation || "",
     shortAnswer: raw.short_answer || raw.explanation || "",
+    interviewPoints: Array.isArray(raw.interview_points) ? raw.interview_points.filter((point) => typeof point === "string") : [],
     tags: Array.isArray(raw.tags) ? raw.tags : [],
   };
 }
@@ -187,6 +195,119 @@ function saveFavorites() {
   const valid = Object.fromEntries(Object.entries(favorites).filter(([id]) => questionById(id)));
   favorites = valid;
   writeJson(STORAGE.favorites, favorites);
+}
+
+function sanitizePracticeRecords(records) {
+  const source = sanitizeObject(records);
+  const clean = {};
+  Object.entries(source).forEach(([id, record]) => {
+    if (!questionById(id)) return;
+    const item = sanitizeObject(record);
+    clean[id] = {
+      checked: item.checked === true,
+      selected: Number.isInteger(item.selected) ? item.selected : null,
+      correct: item.correct === true,
+      selfEval: typeof item.selfEval === "string" ? item.selfEval : "",
+    };
+  });
+  return clean;
+}
+
+function practiceToSession(practice = state.practice) {
+  if (!practice?.questions?.length) return null;
+  return {
+    title: practice.title || "未命名练习",
+    questionIds: practice.questions.map((question) => question.id),
+    index: Math.max(0, Math.min(Number(practice.index) || 0, practice.questions.length - 1)),
+    records: sanitizePracticeRecords(practice.records),
+    mode: practice.mode === "flip" ? "flip" : "choice",
+    flipped: practice.flipped === true,
+    removeOnCorrect: practice.removeOnCorrect === true,
+    returnView: practice.returnView || "chapter",
+    kind: practice.kind || "practice",
+    savedAt: new Date().toISOString(),
+  };
+}
+
+function getPracticeSession() {
+  const saved = sanitizeObject(readJson(STORAGE.practiceSession, {}));
+  if (!Array.isArray(saved.questionIds) || !saved.questionIds.length) return null;
+  if (!questions.length) return null;
+  const questionsFromSession = Array.isArray(saved.questionIds) ? saved.questionIds.map(questionById).filter(Boolean) : [];
+  if (!questionsFromSession.length) {
+    if (localStorage.getItem(STORAGE.practiceSession)) clearPracticeSession();
+    return null;
+  }
+  return {
+    title: typeof saved.title === "string" && saved.title ? saved.title : "上次练习",
+    questions: questionsFromSession,
+    index: Math.max(0, Math.min(Number(saved.index) || 0, questionsFromSession.length - 1)),
+    records: sanitizePracticeRecords(saved.records),
+    mode: saved.mode === "flip" ? "flip" : "choice",
+    flipped: saved.flipped === true,
+    removeOnCorrect: saved.removeOnCorrect === true,
+    returnView: typeof saved.returnView === "string" && saved.returnView ? saved.returnView : "chapter",
+    kind: typeof saved.kind === "string" && saved.kind ? saved.kind : "practice",
+    savedAt: typeof saved.savedAt === "string" ? saved.savedAt : "",
+  };
+}
+
+function savePracticeSession() {
+  const session = practiceToSession();
+  if (session) writeJson(STORAGE.practiceSession, session);
+}
+
+function clearPracticeSession() {
+  localStorage.removeItem(STORAGE.practiceSession);
+}
+
+function getRestorablePracticeSummary() {
+  const session = getPracticeSession();
+  if (!session) return null;
+  const answered = Object.values(session.records).filter((record) => record.checked).length;
+  return {
+    title: session.title,
+    current: session.index + 1,
+    total: session.questions.length,
+    answered,
+    mode: session.mode === "flip" ? "翻转卡片" : "选择题",
+    savedAt: session.savedAt,
+    returnView: session.returnView,
+  };
+}
+
+function restorePracticeSession() {
+  const session = getPracticeSession();
+  if (!session) {
+    showToast("没有可恢复的练习。");
+    return;
+  }
+  state.practice = {
+    title: session.title,
+    questions: session.questions,
+    index: session.index,
+    records: session.records,
+    mode: session.mode,
+    flipped: session.flipped,
+    removeOnCorrect: session.removeOnCorrect,
+    returnView: session.returnView,
+    kind: session.kind,
+  };
+  showPractice();
+}
+
+function renderPracticeResumeCta(compact = false) {
+  const summary = getRestorablePracticeSummary();
+  if (!summary) return "";
+  return `
+    <section class="practice-resume ${compact ? "compact" : ""}">
+      <div>
+        <strong>继续上次练习</strong>
+        <p>${escapeHtml(summary.title)} · ${summary.mode} · 第 ${summary.current}/${summary.total} 题 · 已答 ${summary.answered}</p>
+      </div>
+      <button class="button" data-action="continue-practice">继续答题</button>
+    </section>
+  `;
 }
 
 function checkIn() {
@@ -372,6 +493,7 @@ function renderHome() {
       </div>
       <div class="progress-track"><span style="width:${xpRate}%"></span></div>
     </section>
+    ${renderPracticeResumeCta()}
     <div class="grid mode-grid">
       <article class="card mode-card">
         <h3>章节刷题</h3>
@@ -493,6 +615,7 @@ function renderChapterPicker() {
         <p>选择一个章节后，可以做选择题，也可以用翻转卡片背诵概念、公式和结论。</p>
       </div>
     </div>
+    ${renderPracticeResumeCta(true)}
     <div class="grid chapter-grid">
       ${cards
         .map(
@@ -562,6 +685,7 @@ function renderPractice() {
     $("#practiceView").innerHTML = `<div class="empty">这里暂时没有题目。</div>`;
     return;
   }
+  savePracticeSession();
   const question = practice.questions[practice.index];
   const record = getPracticeRecord(question);
   const progressPct = Math.round(((practice.index + 1) / practice.questions.length) * 100);
@@ -633,6 +757,7 @@ function renderFlipQuestion(question, record) {
           <div class="answer-text">${escapeHtml(question.shortAnswer || question.options[question.correct] || "")}</div>
           ${question.formula ? `<div class="formula-box">${escapeHtml(question.formula)}</div>` : ""}
           <p>${escapeHtml(question.explanation)}</p>
+          ${renderInterviewPoints(question)}
           <div class="self-eval">
             <button class="review-button ${record.selfEval === "easy" ? "active" : ""}" data-action="self-eval" data-level="easy">会了</button>
             <button class="review-button ${record.selfEval === "medium" ? "active" : ""}" data-action="self-eval" data-level="medium">模糊</button>
@@ -644,12 +769,25 @@ function renderFlipQuestion(question, record) {
   `;
 }
 
+function renderInterviewPoints(question) {
+  if (!question.interviewPoints?.length) return "";
+  return `
+    <div class="interview-points">
+      <div class="answer-label">面试口答要点</div>
+      <ul>
+        ${question.interviewPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
 function feedbackHtml(question, correct, selected) {
   return `
     <strong>${correct ? "回答正确" : "回答错误"}</strong>
     <p>你的答案：${escapeHtml(selected)} · 正确答案：${correctLabel(question)}</p>
     ${question.formula ? `<div class="formula-box">${escapeHtml(question.formula)}</div>` : ""}
     <p>${escapeHtml(question.explanation)}</p>
+    ${renderInterviewPoints(question)}
   `;
 }
 
@@ -709,6 +847,7 @@ function prevPractice() {
 }
 
 function showPracticeResult() {
+  clearPracticeSession();
   state.view = "result";
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
   $("#resultView").classList.add("active-view");
@@ -923,6 +1062,7 @@ function submitExam() {
             <p class="muted">${escapeHtml(row.question.question)}</p>
             <p>你的答案：${selectedLabel(row.selected)} · 正确答案：${correctLabel(row.question)}</p>
             ${row.question.formula ? `<div class="formula-box">${escapeHtml(row.question.formula)}</div>` : ""}
+            ${renderInterviewPoints(row.question)}
           </div>
           <button class="button secondary" data-action="start-single-review" data-question-id="${row.question.id}">重做</button>
         </div>
@@ -946,6 +1086,7 @@ function renderMistakes() {
       </div>
       <button class="button danger" data-action="clear-mistakes" ${all.length ? "" : "disabled"}>清空错题</button>
     </div>
+    ${renderPracticeResumeCta(true)}
     ${
       all.length
         ? `<div class="toolbar" style="margin-bottom:14px">
@@ -997,6 +1138,7 @@ function renderFavorites() {
       </div>
       <button class="button danger" data-action="clear-favorites" ${all.length ? "" : "disabled"}>清空收藏</button>
     </div>
+    ${renderPracticeResumeCta(true)}
     ${
       all.length
         ? `<div class="toolbar" style="margin-bottom:14px">
@@ -1041,7 +1183,9 @@ function searchQuestions(query) {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return questions.filter((q) => {
-    const searchable = [q.question, q.explanation, q.formula, q.shortAnswer, q.chapterName, ...(q.tags || []), ...q.options].join(" ").toLocaleLowerCase();
+    const searchable = [q.question, q.explanation, q.formula, q.shortAnswer, q.chapterName, ...(q.tags || []), ...(q.interviewPoints || []), ...q.options]
+      .join(" ")
+      .toLocaleLowerCase();
     return terms.every((term) => searchable.includes(term));
   });
 }
@@ -1056,6 +1200,7 @@ function renderSearch() {
         <p>可以搜题干、解析、公式、章节名或标签。</p>
       </div>
     </div>
+    ${renderPracticeResumeCta(true)}
     <div class="panel search-panel">
       <div class="search-toolbar">
         <div class="field">
@@ -1106,8 +1251,9 @@ function buildBackupPayload() {
       progress,
       mistakes,
       favorites,
-      aiConfig: { apiBase: aiConfig.apiBase, model: aiConfig.model, models: aiConfig.models },
+      aiConfig: { apiBase: aiConfig.apiBase, model: aiConfig.model, models: aiConfig.models, customPrompt: aiConfig.customPrompt },
       aiCache: getAiCache(),
+      aiChats: getAiChats(),
       theme: localStorage.getItem(STORAGE.theme) || "day",
     },
   };
@@ -1126,15 +1272,19 @@ function applyBackupPayload(payload) {
     apiBase: typeof importedAiConfig.apiBase === "string" ? importedAiConfig.apiBase : currentAiConfig.apiBase,
     model: typeof importedAiConfig.model === "string" ? importedAiConfig.model : currentAiConfig.model,
     models: Array.isArray(importedAiConfig.models) ? importedAiConfig.models.filter((item) => typeof item === "string") : currentAiConfig.models,
+    customPrompt: typeof importedAiConfig.customPrompt === "string" ? importedAiConfig.customPrompt : currentAiConfig.customPrompt,
     apiKey: currentAiConfig.apiKey,
   });
   saveAiCache(sanitizeObject(data.aiCache));
+  if (data.aiChats && typeof data.aiChats === "object") saveAiChats(sanitizeObject(data.aiChats));
   if (data.theme === "day" || data.theme === "night") setTheme(data.theme);
   saveProgress();
   saveMistakes();
   saveFavorites();
   state.aiStatus = {};
   state.aiExpanded = {};
+  state.aiFollowupDrafts = {};
+  state.aiFollowupLoading = {};
 }
 
 function renderBackup() {
@@ -1188,6 +1338,7 @@ function renderBackup() {
         <span class="pill">错题 ${Object.keys(mistakes).length}</span>
         <span class="pill">收藏 ${Object.keys(favorites).length}</span>
         <span class="pill">AI 缓存 ${Object.keys(getAiCache()).length}</span>
+        <span class="pill">AI 追问 ${Object.keys(getAiChats()).length}</span>
         <span class="pill">模型 ${getAiConfig().model || "未配置"}</span>
       </div>
       <div class="notice ${state.backupMessage ? "show" : ""}" style="margin-top:12px">${escapeHtml(state.backupMessage)}</div>
@@ -1397,11 +1548,14 @@ async function restoreFromGithub() {
 
 function getAiConfig() {
   const saved = sanitizeObject(readJson(STORAGE.aiConfig, {}));
+  const customPrompt =
+    typeof saved.customPrompt === "string" && saved.customPrompt.trim() ? saved.customPrompt.trim() : DEFAULT_AI_CUSTOM_PROMPT;
   return {
     apiBase: typeof saved.apiBase === "string" ? saved.apiBase : "https://gcli.ggchan.dev",
     apiKey: typeof saved.apiKey === "string" ? saved.apiKey : "",
     model: typeof saved.model === "string" ? saved.model : "",
     models: Array.isArray(saved.models) ? saved.models.filter((model) => typeof model === "string") : [],
+    customPrompt,
   };
 }
 
@@ -1415,6 +1569,59 @@ function getAiCache() {
 
 function saveAiCache(cache) {
   writeJson(STORAGE.aiCache, cache);
+}
+
+function getAiChats() {
+  return sanitizeObject(readJson(STORAGE.aiChats, {}));
+}
+
+function saveAiChats(chats) {
+  writeJson(STORAGE.aiChats, sanitizeObject(chats));
+}
+
+function chatKeyForQuestion(question, model) {
+  return aiCacheKey(question, model || getAiConfig().model);
+}
+
+function sanitizeChatMessages(messages) {
+  return Array.isArray(messages)
+    ? messages
+        .filter((item) => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
+        .map((item) => ({
+          role: item.role,
+          content: item.content,
+          createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+        }))
+    : [];
+}
+
+function getQuestionChat(question, model) {
+  const entry = getAiChats()[chatKeyForQuestion(question, model)];
+  return sanitizeChatMessages(Array.isArray(entry) ? entry : entry?.messages);
+}
+
+function saveQuestionChat(question, model, messages) {
+  const chats = getAiChats();
+  const cleanMessages = sanitizeChatMessages(messages);
+  const key = chatKeyForQuestion(question, model);
+  if (cleanMessages.length) chats[key] = { messages: cleanMessages, updatedAt: new Date().toISOString() };
+  else delete chats[key];
+  saveAiChats(chats);
+}
+
+function appendQuestionChat(question, model, userText, assistantText) {
+  const createdAt = new Date().toISOString();
+  const messages = getQuestionChat(question, model);
+  messages.push({ role: "user", content: userText, createdAt }, { role: "assistant", content: assistantText, createdAt });
+  saveQuestionChat(question, model, messages);
+}
+
+function clearQuestionChat(question, model = getAiConfig().model) {
+  saveQuestionChat(question, model, []);
+  const key = aiStatusKey(question, model);
+  delete state.aiFollowupDrafts[key];
+  delete state.aiFollowupLoading[key];
+  renderActiveQuestion();
 }
 
 function normalizeApiBase(value) {
@@ -1454,6 +1661,10 @@ function renderConfig() {
             ${config.models.map((model) => `<option value="${escapeAttr(model)}" ${model === config.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
           </select>
         </div>
+        <div class="field wide-field">
+          <label for="aiCustomPrompt">自定义回答要求</label>
+          <textarea id="aiCustomPrompt" rows="5" placeholder="${escapeAttr(DEFAULT_AI_CUSTOM_PROMPT)}">${escapeHtml(config.customPrompt)}</textarea>
+        </div>
       </div>
       <div class="answer-actions" style="margin-top:14px">
         <button class="button" data-action="fetch-models">拉取模型</button>
@@ -1473,6 +1684,7 @@ function readConfigForm() {
     apiKey: $("#aiApiKey")?.value || "",
     model: $("#aiModel")?.value || current.model || "",
     models: current.models || [],
+    customPrompt: ($("#aiCustomPrompt")?.value || DEFAULT_AI_CUSTOM_PROMPT).trim() || DEFAULT_AI_CUSTOM_PROMPT,
   };
 }
 
@@ -1524,6 +1736,49 @@ function aiRedoButton(question) {
   return `<button class="icon-button" data-action="redo-ai-explain" data-question-id="${question.id}" title="重新生成解析" aria-label="重新生成解析" ${status.loading ? "disabled" : ""}>↻</button>`;
 }
 
+function renderAiFollowupPanel(question, statusKey) {
+  const config = getAiConfig();
+  const chat = getQuestionChat(question, config.model);
+  const loading = Boolean(state.aiFollowupLoading[statusKey]);
+  const draft = state.aiFollowupDrafts[statusKey] || "";
+  const chatHtml = chat.length
+    ? `<div class="ai-chat-list">
+        ${chat
+          .map(
+            (message) => `
+              <div class="ai-chat-message ${message.role}">
+                <strong>${message.role === "user" ? "你" : "AI"}</strong>
+                <div>${renderMarkdown(message.content)}</div>
+              </div>`
+          )
+          .join("")}
+      </div>`
+    : `<p class="muted">追问只围绕当前题目保存，不会变成全局聊天窗口。</p>`;
+  return `
+    <div class="ai-followup">
+      <div class="ai-followup-head">
+        <strong>本题追问</strong>
+        <button class="button ghost" data-action="clear-ai-chat" data-question-id="${question.id}" ${chat.length ? "" : "disabled"}>清空本题对话</button>
+      </div>
+      ${chatHtml}
+      <div class="followup-suggestions">
+        ${FOLLOWUP_SUGGESTIONS.map(
+          (text) =>
+            `<button class="filter-button" data-action="use-followup-suggestion" data-question-id="${question.id}" data-text="${escapeAttr(text)}">${escapeHtml(text)}</button>`
+        ).join("")}
+      </div>
+      <div class="followup-input-row">
+        <textarea data-followup-input="${question.id}" rows="2" placeholder="继续问这一题，例如：这个近似条件为什么成立？" ${loading ? "disabled" : ""}>${escapeHtml(
+          draft
+        )}</textarea>
+        <button class="button" data-action="send-ai-followup" data-question-id="${question.id}" ${loading ? "disabled" : ""}>${
+    loading ? "发送中..." : "发送"
+  }</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderAiPanel(question, userAnswer) {
   const config = getAiConfig();
   const key = aiStatusKey(question, config.model);
@@ -1545,23 +1800,70 @@ function renderAiPanel(question, userAnswer) {
       </div>
       ${status.error && content ? `<div class="notice show">${escapeHtml(status.error)}；已保留上次解析。</div>` : ""}
       <div class="ai-content">${renderMarkdown(body)}</div>
+      ${content ? renderAiFollowupPanel(question, key) : ""}
     </section>
   `;
 }
 
 function buildPrompt(question, userAnswer) {
   const options = question.options.map((text, index) => `${LABELS[index]}. ${text}`).join("\n");
-  return `课程：半导体器件物理
+  const config = getAiConfig();
+  const interviewPoints = question.interviewPoints?.length ? question.interviewPoints.map((point) => `- ${point}`).join("\n") : "无";
+  return `你正在帮助我准备保研/夏令营面试中的半导体器件物理问答。请把选择题判断和面试口答分开讲。
+
+课程：半导体器件物理
 章节：${question.chapterName}
 题目：${question.question}
-选项：
+选择题选项：
 ${options}
-正确答案：${correctLabel(question)}. ${question.options[question.correct] || ""}
+选择题正确选项：${correctLabel(question)}. ${question.options[question.correct] || ""}
+简答标准答案：${question.shortAnswer || question.options[question.correct] || "无"}
 公式：${question.formula || "无"}
 题库解析：${question.explanation || "无"}
+面试口答要点：
+${interviewPoints}
 用户答案或自评：${userAnswer || "未作答"}
+自定义回答要求：${config.customPrompt || DEFAULT_AI_CUSTOM_PROMPT}
 
-请用严谨的半导体物理语言解释这道题：先说明正确答案，再解释关键物理概念或公式含义，最后给出适合考前复习的一句话记忆提示。`;
+请严格用 Markdown 输出，并使用这三个二级标题：
+## 选择题判断
+说明为什么正确选项对，并逐条指出其他选项的典型误区。
+## 面试简答回答
+给出一段适合 30-60 秒开口回答的组织方式，不要只背选择题选项。
+## 记忆抓手与易错点
+给出记忆抓手、近似条件、适用范围和最容易被追问的点。`;
+}
+
+function buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, followupText) {
+  const config = getAiConfig();
+  const options = question.options.map((text, index) => `${LABELS[index]}. ${text}`).join("\n");
+  const interviewPoints = question.interviewPoints?.length ? question.interviewPoints.map((point) => `- ${point}`).join("\n") : "无";
+  const history = chatHistory.length
+    ? chatHistory.map((message) => `${message.role === "user" ? "用户" : "AI"}：${message.content}`).join("\n")
+    : "无";
+  return `你正在回答一道半导体器件物理题的题内追问。请只围绕本题和相关物理概念展开，不要扩展成全局闲聊。
+
+课程：半导体器件物理
+章节：${question.chapterName}
+题目：${question.question}
+选择题选项：
+${options}
+选择题正确选项：${correctLabel(question)}. ${question.options[question.correct] || ""}
+简答标准答案：${question.shortAnswer || question.options[question.correct] || "无"}
+公式：${question.formula || "无"}
+题库解析：${question.explanation || "无"}
+面试口答要点：
+${interviewPoints}
+用户答案或自评：${userAnswer || "未作答"}
+首次 AI 解析：${firstAiContent || "尚无"}
+本题已有追问历史：
+${history}
+
+自定义回答要求：${config.customPrompt || DEFAULT_AI_CUSTOM_PROMPT}
+
+用户本次追问：${followupText}
+
+请直接回答本次追问。若追问偏“为什么选这个”，优先解释选择题判断；若追问偏“简答怎么答/怎么记”，优先给面试口答结构。若用户说“没懂”，请换一种更直观的物理图像重新解释，并指出最容易混淆的地方。`;
 }
 
 function renderActiveQuestion() {
@@ -1604,7 +1906,11 @@ async function requestAiExplanation(questionId, options = {}) {
       body: JSON.stringify({
         model: config.model,
         messages: [
-          { role: "system", content: "你是一名严谨的模拟 IC 与半导体器件物理助教，解释要准确、分层、适合复习。" },
+          {
+            role: "system",
+            content:
+              "你是一名严谨的模拟 IC 与半导体器件物理保研面试助教，解释要准确、分层，并明确区分选择题判断和面试口答。",
+          },
           { role: "user", content: buildPrompt(question, userAnswer) },
         ],
         temperature: 0.2,
@@ -1623,6 +1929,64 @@ async function requestAiExplanation(questionId, options = {}) {
   renderActiveQuestion();
 }
 
+async function requestAiFollowup(questionId, text) {
+  const question = questionById(questionId);
+  if (!question) return;
+  const config = getAiConfig();
+  const content = String(text || "").trim();
+  const statusKey = aiStatusKey(question, config.model);
+  if (!content || state.aiFollowupLoading[statusKey]) return;
+  if (!config.apiBase || !config.apiKey || !config.model) {
+    state.aiStatus[statusKey] = { ...(state.aiStatus[statusKey] || {}), error: "请先到“AI 配置”填写 API 地址、key，并选择模型。" };
+    state.aiExpanded[statusKey] = true;
+    renderActiveQuestion();
+    return;
+  }
+
+  const cache = getAiCache();
+  const cacheKey = aiCacheKey(question, config.model);
+  const currentStatus = state.aiStatus[statusKey] || {};
+  const firstAiContent = currentStatus.content || cache[cacheKey] || "";
+  const userAnswer = currentUserAnswer(question);
+  const chatHistory = getQuestionChat(question, config.model);
+  state.aiExpanded[statusKey] = true;
+  state.aiFollowupLoading[statusKey] = true;
+  state.aiFollowupDrafts[statusKey] = content;
+  renderActiveQuestion();
+
+  try {
+    const response = await fetch(buildApiUrl(config.apiBase, "chat/completions"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "system",
+            content: `你是一名严谨的模拟 IC 与半导体器件物理保研面试助教。回答要准确、分层，并围绕当前题目区分选择题判断和面试口答。${
+              config.customPrompt || DEFAULT_AI_CUSTOM_PROMPT
+            }`,
+          },
+          { role: "user", content: buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, content) },
+        ],
+        temperature: 0.25,
+      }),
+    });
+    if (!response.ok) throw new Error(`AI 追问请求失败：HTTP ${response.status}`);
+    const payload = await response.json();
+    const reply = payload.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("AI 返回为空。");
+    appendQuestionChat(question, config.model, content, reply);
+    delete state.aiFollowupDrafts[statusKey];
+    state.aiStatus[statusKey] = { ...currentStatus, content: firstAiContent, error: "" };
+  } catch (error) {
+    state.aiStatus[statusKey] = { ...currentStatus, content: firstAiContent, error: explainNetworkError(error) };
+  } finally {
+    state.aiFollowupLoading[statusKey] = false;
+    renderActiveQuestion();
+  }
+}
+
 function currentUserAnswer(question) {
   if (state.exam && $("#examView").classList.contains("active-view")) return selectedLabel(state.exam.answers[question.id]);
   if (state.practice?.questions[state.practice.index]?.id === question.id) {
@@ -1639,23 +2003,50 @@ function explainNetworkError(error) {
 }
 
 function renderInlineMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
+  const placeholders = [];
+  const stash = (html) => {
+    const token = `\u0000${placeholders.length}\u0000`;
+    placeholders.push(html);
+    return token;
+  };
+  let text = String(value || "")
+    .replace(/`([^`]+)`/g, (_, code) => stash(`<code>${escapeHtml(code)}</code>`))
+    .replace(/\\\((.+?)\\\)/g, (_, math) => stash(`<span class="math-inline">${escapeHtml(math)}</span>`))
+    .replace(/\$([^$\n]+)\$/g, (_, math) => stash(`<span class="math-inline">${escapeHtml(math)}</span>`));
+  text = escapeHtml(text)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
+  placeholders.forEach((html, index) => {
+    text = text.replace(new RegExp(`\\u0000${index}\\u0000`, "g"), html);
+  });
+  return text;
 }
 
 function renderMarkdown(value) {
   const lines = String(value || "").replace(/\r\n/g, "\n").split("\n");
   const html = [];
   let listType = "";
+  let inCode = false;
+  let codeLines = [];
+  let inMath = false;
+  let mathLines = [];
+  let quoteLines = [];
   const closeList = () => {
     if (listType) {
       html.push(`</${listType}>`);
       listType = "";
     }
   };
+  const closeQuote = () => {
+    if (quoteLines.length) {
+      html.push(`<blockquote>${quoteLines.map((line) => `<p>${renderInlineMarkdown(line)}</p>`).join("")}</blockquote>`);
+      quoteLines = [];
+    }
+  };
   const openList = (type) => {
+    closeQuote();
     if (listType !== type) {
       closeList();
       listType = type;
@@ -1664,8 +2055,61 @@ function renderMarkdown(value) {
   };
   lines.forEach((line) => {
     const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      closeList();
+      closeQuote();
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    if (trimmed === "$$" || trimmed === "\\[" || trimmed === "\\]") {
+      closeList();
+      closeQuote();
+      if (inMath) {
+        html.push(`<div class="math-block">${escapeHtml(mathLines.join("\n"))}</div>`);
+        mathLines = [];
+        inMath = false;
+      } else {
+        inMath = true;
+      }
+      return;
+    }
+    if (inMath) {
+      mathLines.push(line);
+      return;
+    }
     if (!trimmed) {
       closeList();
+      closeQuote();
+      return;
+    }
+    if (/^---+$/.test(trimmed)) {
+      closeList();
+      closeQuote();
+      html.push("<hr>");
+      return;
+    }
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      closeQuote();
+      const level = heading[1].length + 2;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      return;
+    }
+    const quote = trimmed.match(/^>\s?(.+)$/);
+    if (quote) {
+      closeList();
+      quoteLines.push(quote[1]);
       return;
     }
     const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
@@ -1681,9 +2125,18 @@ function renderMarkdown(value) {
       return;
     }
     closeList();
+    closeQuote();
+    const blockMath = trimmed.match(/^\$\$(.+)\$\$$/) || trimmed.match(/^\\\[(.+)\\\]$/);
+    if (blockMath) {
+      html.push(`<div class="math-block">${escapeHtml(blockMath[1])}</div>`);
+      return;
+    }
     html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
   });
+  if (inCode) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  if (inMath) html.push(`<div class="math-block">${escapeHtml(mathLines.join("\n"))}</div>`);
   closeList();
+  closeQuote();
   return html.join("");
 }
 
@@ -1702,10 +2155,16 @@ function loadTheme() {
 function resetData() {
   if (!window.confirm("确定要重置所有学习数据吗？建议先导出备份。")) return;
   if (!window.confirm("再次确认：重置后将丢失全部学习进度，此操作不可撤销。")) return;
-  [STORAGE.progress, STORAGE.mistakes, STORAGE.favorites, STORAGE.aiCache].forEach((key) => localStorage.removeItem(key));
+  [STORAGE.progress, STORAGE.mistakes, STORAGE.favorites, STORAGE.aiCache, STORAGE.aiChats, STORAGE.practiceSession].forEach((key) =>
+    localStorage.removeItem(key)
+  );
   progress = { answered: {}, xp: 0, level: 1, achievements: {}, studyLog: {} };
   mistakes = {};
   favorites = {};
+  state.aiStatus = {};
+  state.aiExpanded = {};
+  state.aiFollowupDrafts = {};
+  state.aiFollowupLoading = {};
   checkIn();
   showToast("学习数据已重置。");
   showView("home");
@@ -1748,6 +2207,7 @@ function bindEvents() {
     if (action === "go-search") showView("search");
     if (action === "go-backup") showView("backup");
     if (action === "go-config") showView("config");
+    if (action === "continue-practice") restorePracticeSession();
     if (action === "set-theme") setTheme(target.dataset.theme);
     if (action === "start-chapter") startChapterPractice(Number(target.dataset.chapter), target.dataset.mode);
     if (action === "back-practice") showView(state.practice?.returnView || "chapter");
@@ -1844,7 +2304,34 @@ function bindEvents() {
     }
     if (action === "ai-explain") requestAiExplanation(target.dataset.questionId);
     if (action === "redo-ai-explain") requestAiExplanation(target.dataset.questionId, { force: true });
+    if (action === "use-followup-suggestion") {
+      const question = questionById(target.dataset.questionId);
+      if (!question) return;
+      const key = aiStatusKey(question, getAiConfig().model);
+      state.aiFollowupDrafts[key] = target.dataset.text || "";
+      const input = document.querySelector(`[data-followup-input="${question.id}"]`);
+      if (input) {
+        input.value = state.aiFollowupDrafts[key];
+        input.focus();
+      }
+    }
+    if (action === "send-ai-followup") {
+      const input = document.querySelector(`[data-followup-input="${target.dataset.questionId}"]`);
+      requestAiFollowup(target.dataset.questionId, input?.value || "");
+    }
+    if (action === "clear-ai-chat") {
+      const question = questionById(target.dataset.questionId);
+      if (question && window.confirm("确定清空这道题的追问历史吗？AI 解析缓存不会被清除。")) clearQuestionChat(question);
+    }
     if (action === "show-study-panel") showView("home");
+  });
+
+  document.addEventListener("input", (event) => {
+    const input = event.target;
+    if (!input.matches("[data-followup-input]")) return;
+    const question = questionById(input.dataset.followupInput);
+    if (!question) return;
+    state.aiFollowupDrafts[aiStatusKey(question, getAiConfig().model)] = input.value;
   });
 
   document.addEventListener("change", (event) => {

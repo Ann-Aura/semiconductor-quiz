@@ -214,6 +214,10 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.wide-field {
+  grid-column: 1 / -1;
+}
+
 .card,
 .panel {
   border: 1px solid var(--line);
@@ -727,6 +731,27 @@ button {
   opacity: 0.5;
 }
 
+.practice-resume {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--soft-2);
+  padding: 14px;
+}
+
+.practice-resume.compact {
+  margin-top: -2px;
+}
+
+.practice-resume p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
 .ai-panel {
   border-left: 4px solid var(--blue);
   background: var(--soft);
@@ -746,6 +771,23 @@ button {
 
 .ai-content p {
   margin: 8px 0;
+  line-height: 1.7;
+}
+
+.ai-content h3,
+.ai-content h4,
+.ai-content h5 {
+  margin: 16px 0 8px;
+  color: var(--ink);
+}
+
+.ai-content h3 {
+  font-size: 18px;
+}
+
+.ai-content h4,
+.ai-content h5 {
+  font-size: 16px;
 }
 
 .ai-content ul,
@@ -753,11 +795,160 @@ button {
   margin: 8px 0 8px 22px;
 }
 
+.ai-content li {
+  margin: 5px 0;
+  line-height: 1.65;
+}
+
 .ai-content code,
-.ai-content pre {
+.ai-content pre,
+.ai-chat-message code,
+.ai-chat-message pre {
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.08);
+}
+
+.ai-content code,
+.ai-chat-message code {
   padding: 2px 5px;
+}
+
+.ai-content pre,
+.ai-chat-message pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+}
+
+.ai-content blockquote,
+.ai-chat-message blockquote {
+  margin: 10px 0;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  padding: 4px 0 4px 12px;
+}
+
+.ai-content hr,
+.ai-chat-message hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 14px 0;
+}
+
+.math-inline {
+  display: inline-block;
+  border-radius: 6px;
+  background: rgba(36, 120, 108, 0.1);
+  color: var(--ink);
+  padding: 1px 5px;
+  font-family: "Cambria Math", "Times New Roman", serif;
+}
+
+.math-block {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 10px 12px;
+  font-family: "Cambria Math", "Times New Roman", serif;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.interview-points {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 12px;
+}
+
+.interview-points ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.interview-points li {
+  line-height: 1.55;
+}
+
+.ai-followup {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.ai-followup-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.ai-chat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-chat-message {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.ai-chat-message.user {
+  border-color: var(--accent);
+  background: var(--soft-2);
+}
+
+.ai-chat-message strong {
+  color: var(--accent-dark);
+  font-size: 13px;
+}
+
+.ai-chat-message p:first-child {
+  margin-top: 0;
+}
+
+.ai-chat-message p:last-child {
+  margin-bottom: 0;
+}
+
+.followup-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.followup-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.followup-input-row textarea {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.followup-input-row .button {
+  min-width: 86px;
 }
 
 .empty {
@@ -861,6 +1052,19 @@ button {
   .search-toolbar {
     grid-template-columns: 1fr;
   }
+
+  .practice-resume {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .followup-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .followup-input-row .button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 560px) {
@@ -884,7 +1088,19 @@ button {
   .answer-actions .button,
   .exam-actions .button,
   .chapter-actions .button,
-  .top-actions .button {
+  .top-actions .button,
+  .practice-resume .button,
+  .ai-followup-head .button {
     width: 100%;
+  }
+
+  .ai-panel-head,
+  .ai-followup-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .followup-suggestions .filter-button {
+    flex: 1 1 150px;
   }
 }
