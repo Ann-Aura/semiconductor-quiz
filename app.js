@@ -210,6 +210,8 @@ function sanitizePracticeRecords(records) {
       selected: Number.isInteger(item.selected) ? item.selected : null,
       correct: item.correct === true,
       selfEval: typeof item.selfEval === "string" ? item.selfEval : "",
+      answerCollapsed: item.answerCollapsed === true,
+      progressRecorded: item.progressRecorded === true || item.checked === true,
     };
   });
   return clean;
@@ -677,7 +679,16 @@ function showPractice() {
 }
 
 function getPracticeRecord(question) {
-  if (!state.practice.records[question.id]) state.practice.records[question.id] = { checked: false, selected: null, correct: false, selfEval: "" };
+  if (!state.practice.records[question.id]) {
+    state.practice.records[question.id] = {
+      checked: false,
+      selected: null,
+      correct: false,
+      selfEval: "",
+      answerCollapsed: false,
+      progressRecorded: false,
+    };
+  }
   return state.practice.records[question.id];
 }
 
@@ -709,6 +720,8 @@ function renderPractice() {
       <div class="answer-actions">
         <button class="button secondary" data-action="prev-practice" ${practice.index === 0 ? "disabled" : ""}>上一题</button>
         ${practice.mode === "choice" ? `<button class="button" data-action="check-practice" ${record.checked ? "disabled" : ""}>提交本题</button>` : ""}
+        ${practice.mode === "choice" && record.checked ? `<button class="button secondary" data-action="toggle-answer-review">${record.answerCollapsed ? "展开答案" : "收起答案"}</button>` : ""}
+        ${practice.mode === "choice" && record.checked ? `<button class="button ghost" data-action="redo-practice-question">重做本题</button>` : ""}
         ${favoriteButton(question)}
         <button class="button secondary" data-action="ai-explain" data-question-id="${question.id}">${aiActionLabel(question)}</button>
         ${aiRedoButton(question)}
@@ -720,16 +733,17 @@ function renderPractice() {
 }
 
 function renderChoiceQuestion(question, record) {
+  const revealAnswer = record.checked && !record.answerCollapsed;
   return `
-    <div class="question-top"><span>第 ${question.chapter} 章</span><span>正确答案 ${correctLabel(question)}</span></div>
+    <div class="question-top"><span>第 ${question.chapter} 章</span><span>${revealAnswer ? `正确答案 ${correctLabel(question)}` : "选择题"}</span></div>
     <h3 class="question-title">${escapeHtml(question.question)}</h3>
     <div class="options">
       ${question.options
         .map((option, index) => {
           const classes = ["option"];
           if (record.selected === index) classes.push("selected");
-          if (record.checked && index === question.correct) classes.push("correct");
-          if (record.checked && record.selected === index && index !== question.correct) classes.push("wrong");
+          if (revealAnswer && index === question.correct) classes.push("correct");
+          if (revealAnswer && record.selected === index && index !== question.correct) classes.push("wrong");
           return `
             <label class="${classes.join(" ")}">
               <input type="radio" name="practice-answer-${question.id}" value="${index}" ${record.selected === index ? "checked" : ""} ${record.checked ? "disabled" : ""}>
@@ -739,8 +753,8 @@ function renderChoiceQuestion(question, record) {
         })
         .join("")}
     </div>
-    <div class="feedback ${record.checked ? "show" : ""} ${record.correct ? "ok" : "bad"}">
-      ${record.checked ? feedbackHtml(question, record.correct, selectedLabel(record.selected)) : ""}
+    <div class="feedback ${revealAnswer ? "show" : ""} ${record.correct ? "ok" : "bad"}">
+      ${revealAnswer ? feedbackHtml(question, record.correct, selectedLabel(record.selected)) : ""}
     </div>
   `;
 }
@@ -809,9 +823,40 @@ function checkPracticeAnswer() {
   record.selected = Number(selected.value);
   record.correct = record.selected === question.correct;
   record.checked = true;
-  recordAnswer(question, record.correct, { selected: record.selected });
-  if (record.correct) showToast("回答正确，+10 XP");
-  else showToast("答错了，已加入错题本。");
+  record.answerCollapsed = false;
+  if (!record.progressRecorded) {
+    recordAnswer(question, record.correct, { selected: record.selected });
+    record.progressRecorded = true;
+    if (record.correct) showToast("回答正确，+10 XP");
+    else showToast("答错了，已加入错题本。");
+  } else {
+    showToast(record.correct ? "本次重做回答正确。" : "本次重做答错了。");
+  }
+  renderPractice();
+}
+
+function togglePracticeAnswerReview() {
+  const practice = state.practice;
+  if (!practice || practice.mode !== "choice") return;
+  const question = practice.questions[practice.index];
+  const record = getPracticeRecord(question);
+  if (!record.checked) return;
+  record.answerCollapsed = !record.answerCollapsed;
+  renderPractice();
+}
+
+function redoPracticeQuestion() {
+  const practice = state.practice;
+  if (!practice || practice.mode !== "choice") return;
+  const question = practice.questions[practice.index];
+  const record = getPracticeRecord(question);
+  if (!record.checked) return;
+  record.progressRecorded = true;
+  record.selected = null;
+  record.correct = false;
+  record.checked = false;
+  record.answerCollapsed = false;
+  showToast("已清空本题本次作答，可以重新选择。");
   renderPractice();
 }
 
@@ -2291,6 +2336,8 @@ function bindEvents() {
       renderPractice();
     }
     if (action === "check-practice") checkPracticeAnswer();
+    if (action === "toggle-answer-review") togglePracticeAnswerReview();
+    if (action === "redo-practice-question") redoPracticeQuestion();
     if (action === "prev-practice") prevPractice();
     if (action === "next-practice") nextPractice();
     if (action === "flip-card") {
