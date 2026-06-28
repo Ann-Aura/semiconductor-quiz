@@ -1594,8 +1594,8 @@ function saveAiChats(chats) {
   writeJson(STORAGE.aiChats, sanitizeObject(chats));
 }
 
-function chatKeyForQuestion(question, model) {
-  return aiCacheKey(question, model || getAiConfig().model);
+function chatKeyForQuestion(question, model, context = currentAiContext(question)) {
+  return aiCacheKey(question, model || getAiConfig().model, context);
 }
 
 function sanitizeChatMessages(messages) {
@@ -1610,30 +1610,30 @@ function sanitizeChatMessages(messages) {
     : [];
 }
 
-function getQuestionChat(question, model) {
-  const entry = getAiChats()[chatKeyForQuestion(question, model)];
+function getQuestionChat(question, model, context = currentAiContext(question)) {
+  const entry = getAiChats()[chatKeyForQuestion(question, model, context)];
   return sanitizeChatMessages(Array.isArray(entry) ? entry : entry?.messages);
 }
 
-function saveQuestionChat(question, model, messages) {
+function saveQuestionChat(question, model, messages, context = currentAiContext(question)) {
   const chats = getAiChats();
   const cleanMessages = sanitizeChatMessages(messages);
-  const key = chatKeyForQuestion(question, model);
+  const key = chatKeyForQuestion(question, model, context);
   if (cleanMessages.length) chats[key] = { messages: cleanMessages, updatedAt: new Date().toISOString() };
   else delete chats[key];
   saveAiChats(chats);
 }
 
-function appendQuestionChat(question, model, userText, assistantText) {
+function appendQuestionChat(question, model, userText, assistantText, context = currentAiContext(question)) {
   const createdAt = new Date().toISOString();
-  const messages = getQuestionChat(question, model);
+  const messages = getQuestionChat(question, model, context);
   messages.push({ role: "user", content: userText, createdAt }, { role: "assistant", content: assistantText, createdAt });
-  saveQuestionChat(question, model, messages);
+  saveQuestionChat(question, model, messages, context);
 }
 
-function clearQuestionChat(question, model = getAiConfig().model) {
-  saveQuestionChat(question, model, []);
-  const key = aiStatusKey(question, model);
+function clearQuestionChat(question, model = getAiConfig().model, context = currentAiContext(question)) {
+  saveQuestionChat(question, model, [], context);
+  const key = aiStatusKey(question, model, context);
   delete state.aiFollowupDrafts[key];
   delete state.aiFollowupLoading[key];
   renderActiveQuestion();
@@ -1727,19 +1727,29 @@ async function fetchModels() {
   renderConfigSafe();
 }
 
-function aiCacheKey(question, model) {
-  return `${model || "model"}:${question.id}`;
+function currentAiContext(question) {
+  const currentPracticeQuestion = state.practice?.questions?.[state.practice.index];
+  if ($("#practiceView")?.classList.contains("active-view") && currentPracticeQuestion?.id === question.id) {
+    return state.practice.mode === "flip" ? "flip" : "choice";
+  }
+  if ($("#examView")?.classList.contains("active-view")) return "exam";
+  return "choice";
 }
 
-function aiStatusKey(question, model) {
-  return model ? aiCacheKey(question, model) : `unconfigured:${question.id}`;
+function aiCacheKey(question, model, context = currentAiContext(question)) {
+  return `${model || "model"}:${context}:${question.id}`;
+}
+
+function aiStatusKey(question, model, context = currentAiContext(question)) {
+  return model ? aiCacheKey(question, model, context) : `unconfigured:${context}:${question.id}`;
 }
 
 function aiActionLabel(question) {
   const config = getAiConfig();
-  const key = aiStatusKey(question, config.model);
+  const context = currentAiContext(question);
+  const key = aiStatusKey(question, config.model, context);
   const status = state.aiStatus[key] || {};
-  const cached = config.model ? getAiCache()[aiCacheKey(question, config.model)] : "";
+  const cached = config.model ? getAiCache()[aiCacheKey(question, config.model, context)] : "";
   if (status.loading) return "解析中...";
   if (status.content || cached) return state.aiExpanded[key] ? "收起解析" : "展开解析";
   return "AI 解析";
@@ -1751,9 +1761,9 @@ function aiRedoButton(question) {
   return `<button class="icon-button" data-action="redo-ai-explain" data-question-id="${question.id}" title="重新生成解析" aria-label="重新生成解析" ${status.loading ? "disabled" : ""}>↻</button>`;
 }
 
-function renderAiFollowupPanel(question, statusKey) {
+function renderAiFollowupPanel(question, statusKey, context) {
   const config = getAiConfig();
-  const chat = getQuestionChat(question, config.model);
+  const chat = getQuestionChat(question, config.model, context);
   const loading = Boolean(state.aiFollowupLoading[statusKey]);
   const draft = state.aiFollowupDrafts[statusKey] || "";
   const chatHtml = chat.length
@@ -1796,10 +1806,11 @@ function renderAiFollowupPanel(question, statusKey) {
 
 function renderAiPanel(question, userAnswer) {
   const config = getAiConfig();
-  const key = aiStatusKey(question, config.model);
+  const context = currentAiContext(question);
+  const key = aiStatusKey(question, config.model, context);
   const cache = getAiCache();
   const status = state.aiStatus[key] || {};
-  const cached = config.model ? cache[aiCacheKey(question, config.model)] : "";
+  const cached = config.model ? cache[aiCacheKey(question, config.model, context)] : "";
   const content = status.content || cached || "";
   const expanded = Boolean(state.aiExpanded[key]);
   if (!status.loading && !status.error && (!content || !expanded)) return "";
@@ -1815,15 +1826,39 @@ function renderAiPanel(question, userAnswer) {
       </div>
       ${status.error && content ? `<div class="notice show">${escapeHtml(status.error)}；已保留上次解析。</div>` : ""}
       <div class="ai-content">${renderMarkdown(body)}</div>
-      ${content ? renderAiFollowupPanel(question, key) : ""}
+      ${content ? renderAiFollowupPanel(question, key, context) : ""}
     </section>
   `;
 }
 
-function buildPrompt(question, userAnswer) {
+function buildPrompt(question, userAnswer, context = currentAiContext(question)) {
   const options = question.options.map((text, index) => `${LABELS[index]}. ${text}`).join("\n");
   const config = getAiConfig();
   const interviewPoints = question.interviewPoints?.length ? question.interviewPoints.map((point) => `- ${point}`).join("\n") : "无";
+  if (context === "flip") {
+    return `你正在帮助我准备保研/夏令营面试中的半导体器件物理翻转卡片口答。当前是翻转卡片模式，请优先围绕原卡片题目和原卡片答案讲，不要把选择题选项当成主线。
+
+课程：半导体器件物理
+章节：${question.chapterName}
+原卡片题目：${question.cardQuestion || question.question || "无"}
+原卡片简答答案：${question.cardAnswer || question.shortAnswer || question.options[question.correct] || "无"}
+公式：${question.formula || "无"}
+题库解析：${question.explanation || "无"}
+配套选择题追问：${question.question}
+配套选择题正确选项：${correctLabel(question)}. ${question.options[question.correct] || ""}
+面试口答要点：
+${interviewPoints}
+用户自评：${userAnswer || "未自评"}
+自定义回答要求：${config.customPrompt || DEFAULT_AI_CUSTOM_PROMPT}
+
+请严格用 Markdown 输出，并使用这三个二级标题：
+## 原题口答框架
+基于原卡片题目，给出一段适合 30-60 秒开口回答的组织方式。
+## 公式与物理图像
+解释公式中关键物理量、适用条件和背后的物理图像。
+## 记忆抓手与追问点
+给出记忆抓手、易错点，以及面试老师可能继续追问的问题。`;
+  }
   return `你正在帮助我准备保研/夏令营面试中的半导体器件物理问答。请把选择题判断和面试口答分开讲。
 
 课程：半导体器件物理
@@ -1850,7 +1885,7 @@ ${interviewPoints}
 给出记忆抓手、近似条件、适用范围和最容易被追问的点。`;
 }
 
-function buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, followupText) {
+function buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, followupText, context = currentAiContext(question)) {
   const config = getAiConfig();
   const options = question.options.map((text, index) => `${LABELS[index]}. ${text}`).join("\n");
   const interviewPoints = question.interviewPoints?.length ? question.interviewPoints.map((point) => `- ${point}`).join("\n") : "无";
@@ -1861,6 +1896,7 @@ function buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, 
 
 课程：半导体器件物理
 章节：${question.chapterName}
+当前模式：${context === "flip" ? "翻转卡片口答" : context === "exam" ? "随机考试选择题" : "选择题练习"}
 选择题题目：${question.question}
 选择题选项：
 ${options}
@@ -1880,7 +1916,11 @@ ${history}
 
 用户本次追问：${followupText}
 
-请直接回答本次追问。若追问偏“为什么选这个”，优先解释选择题判断；若追问偏“简答怎么答/怎么记”，优先给面试口答结构。若用户说“没懂”，请换一种更直观的物理图像重新解释，并指出最容易混淆的地方。`;
+请直接回答本次追问。${
+    context === "flip"
+      ? "当前在翻转卡片模式：若追问偏“怎么答/怎么记/没懂”，优先围绕原卡片题目和原卡片简答答案组织口答；只有用户明确问选项时，才解释选择题判断。"
+      : "当前在选择题模式：若追问偏“为什么选这个”，优先解释选择题判断；若追问偏“简答怎么答/怎么记”，再给面试口答结构。"
+  }若用户说“没懂”，请换一种更直观的物理图像重新解释，并指出最容易混淆的地方。`;
 }
 
 function renderActiveQuestion() {
@@ -1892,8 +1932,9 @@ async function requestAiExplanation(questionId, options = {}) {
   const question = questionById(questionId);
   if (!question) return;
   const config = getAiConfig();
-  const statusKey = aiStatusKey(question, config.model);
-  const cacheKey = aiCacheKey(question, config.model);
+  const context = currentAiContext(question);
+  const statusKey = aiStatusKey(question, config.model, context);
+  const cacheKey = aiCacheKey(question, config.model, context);
   const cache = getAiCache();
   const currentStatus = state.aiStatus[statusKey] || {};
   if (currentStatus.loading) return;
@@ -1928,7 +1969,7 @@ async function requestAiExplanation(questionId, options = {}) {
             content:
               "你是一名严谨的模拟 IC 与半导体器件物理保研面试助教，解释要准确、分层，并明确区分选择题判断和面试口答。",
           },
-          { role: "user", content: buildPrompt(question, userAnswer) },
+          { role: "user", content: buildPrompt(question, userAnswer, context) },
         ],
         temperature: 0.2,
       }),
@@ -1950,8 +1991,9 @@ async function requestAiFollowup(questionId, text) {
   const question = questionById(questionId);
   if (!question) return;
   const config = getAiConfig();
+  const context = currentAiContext(question);
   const content = String(text || "").trim();
-  const statusKey = aiStatusKey(question, config.model);
+  const statusKey = aiStatusKey(question, config.model, context);
   if (!content || state.aiFollowupLoading[statusKey]) return;
   if (!config.apiBase || !config.apiKey || !config.model) {
     state.aiStatus[statusKey] = { ...(state.aiStatus[statusKey] || {}), error: "请先到“AI 配置”填写 API 地址、key，并选择模型。" };
@@ -1961,11 +2003,11 @@ async function requestAiFollowup(questionId, text) {
   }
 
   const cache = getAiCache();
-  const cacheKey = aiCacheKey(question, config.model);
+  const cacheKey = aiCacheKey(question, config.model, context);
   const currentStatus = state.aiStatus[statusKey] || {};
   const firstAiContent = currentStatus.content || cache[cacheKey] || "";
   const userAnswer = currentUserAnswer(question);
-  const chatHistory = getQuestionChat(question, config.model);
+  const chatHistory = getQuestionChat(question, config.model, context);
   state.aiExpanded[statusKey] = true;
   state.aiFollowupLoading[statusKey] = true;
   state.aiFollowupDrafts[statusKey] = content;
@@ -1984,7 +2026,7 @@ async function requestAiFollowup(questionId, text) {
               config.customPrompt || DEFAULT_AI_CUSTOM_PROMPT
             }`,
           },
-          { role: "user", content: buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, content) },
+          { role: "user", content: buildFollowupPrompt(question, userAnswer, firstAiContent, chatHistory, content, context) },
         ],
         temperature: 0.25,
       }),
@@ -1993,7 +2035,7 @@ async function requestAiFollowup(questionId, text) {
     const payload = await response.json();
     const reply = payload.choices?.[0]?.message?.content?.trim();
     if (!reply) throw new Error("AI 返回为空。");
-    appendQuestionChat(question, config.model, content, reply);
+    appendQuestionChat(question, config.model, content, reply, context);
     delete state.aiFollowupDrafts[statusKey];
     state.aiStatus[statusKey] = { ...currentStatus, content: firstAiContent, error: "" };
   } catch (error) {
@@ -2329,7 +2371,7 @@ function bindEvents() {
     if (action === "use-followup-suggestion") {
       const question = questionById(target.dataset.questionId);
       if (!question) return;
-      const key = aiStatusKey(question, getAiConfig().model);
+      const key = aiStatusKey(question, getAiConfig().model, currentAiContext(question));
       state.aiFollowupDrafts[key] = target.dataset.text || "";
       const input = document.querySelector(`[data-followup-input="${question.id}"]`);
       if (input) {
@@ -2353,7 +2395,7 @@ function bindEvents() {
     if (!input.matches("[data-followup-input]")) return;
     const question = questionById(input.dataset.followupInput);
     if (!question) return;
-    state.aiFollowupDrafts[aiStatusKey(question, getAiConfig().model)] = input.value;
+    state.aiFollowupDrafts[aiStatusKey(question, getAiConfig().model, currentAiContext(question))] = input.value;
   });
 
   document.addEventListener("change", (event) => {

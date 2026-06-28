@@ -99,6 +99,7 @@ semiconductor_quiz/
 2. **选择题与卡片双轨显示** - 选择题模式继续使用 `question_text/options/short_answer`；翻转卡片正面使用 `card_question`，背面使用 `card_answer`，公式、解析和面试口答要点继续辅助复习。
 3. **AI 上下文区分题型** - AI prompt 同时携带选择题题目和原卡片题目/答案，避免把选择题选项当成唯一简答材料。
 4. **校验工具加防线** - `tools/validate-question-bank.js` 新增 `card_question/card_answer` 必填检查，防止后续题库重写再次覆盖卡片内容。
+5. **AI 解析按模式分轨** - 选择题、随机考试和翻转卡片使用不同 AI 缓存/追问键；翻转卡片模式下的提示词优先围绕 `card_question/card_answer` 生成原题口答框架，只有明确追问选项时才解释选择题判断。
 
 ### 2026-06-28（刷题续练 + 面试式 AI 解析 + Markdown 渲染）
 
