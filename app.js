@@ -1,651 +1,1790 @@
-/* ==============================
-   半导体器件物理 · 刷题 - 主程序
-   ============================== */
+const STORAGE = {
+  progress: "semiquiz-progress-v2",
+  mistakes: "semiquiz-mistakes-v2",
+  favorites: "semiquiz-favorites-v2",
+  aiConfig: "semiquiz-ai-config-v2",
+  aiCache: "semiquiz-ai-cache-v2",
+  backupConfig: "semiquiz-backup-config-v2",
+  theme: "semiquiz-theme-v2",
+};
 
-// ===== 全局状态 =====
+const BACKUP_FILENAME = "semiconductor-quiz-backup.json";
+const LEGACY_DATA_KEY = "semiquiz_data";
+const LEGACY_THEME_KEY = "semiquiz_theme";
+const LABELS = ["A", "B", "C", "D", "E", "F"];
+
 let questions = [];
-let currentIndex = 0;
-let currentIds = [];
-let mode = 'choice';
-let answered = {};
-let wrongSet = new Set();
-let xp = 0;
-let level = 1;
-let achievements = {};
-let studyLog = {};
+let chapters = [];
+let progress = { answered: {}, xp: 0, level: 1, achievements: {}, studyLog: {} };
+let mistakes = {};
+let favorites = {};
 let sessionStart = Date.now();
-let todayStr = '';
-let started = false;
-let currentTheme = 'day';
-let searchTimer = null;
+let todayStr = getTodayStr();
 
-// ===== 初始化 =====
-function init() {
-  loadData();
-  loadTheme();
-  fetch('questions.json')
-    .then(r => r.json())
-    .then(data => {
-      questions = data;
-      document.getElementById('qText').textContent = '题库加载完成！';
-      buildChapterFilter();
-      applyFilters();
-      renderCalendar();
-      updateTodaySummary();
-      updateAchievements();
-      updateStats();
-      checkIn();
-      showWelcome();
-    })
-    .catch(err => {
-      document.getElementById('qText').textContent = '⚠️ 题库加载失败，请检查 questions.json 是否存在。';
-      console.error(err);
-    });
+const state = {
+  view: "home",
+  practice: null,
+  exam: null,
+  timer: null,
+  searchQuery: "",
+  reviewFilter: "all",
+  aiStatus: {},
+  aiExpanded: {},
+  backupMessage: "",
+  configMessage: "",
+};
+
+const $ = (selector) => document.querySelector(selector);
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-// ===== 数据持久化 =====
-function loadData() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('semiquiz_data'));
-    if (saved) {
-      answered = saved.answered || {};
-      wrongSet = new Set(saved.wrongList || []);
-      xp = saved.xp || 0;
-      level = saved.level || 1;
-      achievements = saved.achievements || {};
-      studyLog = saved.studyLog || {};
-    }
-  } catch (e) { console.warn('Load error', e); }
-  todayStr = getTodayStr();
+function writeJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
 }
 
-function saveData() {
-  try {
-    localStorage.setItem('semiquiz_data', JSON.stringify({
-      answered,
-      wrongList: [...wrongSet],
-      xp,
-      level,
-      achievements,
-      studyLog
-    }));
-  } catch (e) { console.warn('Save error', e); }
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
+}
+
+function shuffle(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 function getTodayStr() {
   const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function normalizeQuestion(raw) {
+  const id = Number(raw.id);
+  const correct = Number(raw.correct);
+  return {
+    id,
+    chapter: Number(raw.chapter) || 0,
+    chapterName: raw.chapter_name || `第 ${raw.chapter || ""} 章`,
+    question: raw.question_text || raw.question || "",
+    options: Array.isArray(raw.options) ? raw.options : [],
+    correct: Number.isFinite(correct) ? correct : 0,
+    formula: raw.formula || "",
+    explanation: raw.explanation || "",
+    shortAnswer: raw.short_answer || raw.explanation || "",
+    tags: Array.isArray(raw.tags) ? raw.tags : [],
+  };
+}
+
+async function loadQuestionBank() {
+  if (Array.isArray(window.SEMICONDUCTOR_QUESTION_BANK)) {
+    return window.SEMICONDUCTOR_QUESTION_BANK;
+  }
+  const response = await fetch("questions.json");
+  if (!response.ok) throw new Error(`题库读取失败：HTTP ${response.status}`);
+  return response.json();
+}
+
+async function init() {
+  loadTheme();
+  loadData();
+  try {
+    const bank = await loadQuestionBank();
+    questions = bank.map(normalizeQuestion).filter((q) => q.id && q.question);
+    buildChapters();
+    checkIn();
+    bindEvents();
+    updateGlobalStats();
+    showView("home");
+  } catch (error) {
+    $("#homeView").innerHTML = `<div class="empty">题库加载失败：${escapeHtml(error.message || String(error))}</div>`;
+  }
+}
+
+function buildChapters() {
+  const map = new Map();
+  questions.forEach((q) => {
+    if (!map.has(q.chapter)) map.set(q.chapter, { id: q.chapter, name: q.chapterName, count: 0 });
+    map.get(q.chapter).count += 1;
+  });
+  chapters = [...map.values()].sort((a, b) => a.id - b.id);
+  $("#bankMeta").textContent = `${questions.length} 题 · ${chapters.length} 个章节`;
+}
+
+function loadData() {
+  const hasV2 = localStorage.getItem(STORAGE.progress);
+  if (!hasV2) migrateLegacyData();
+  progress = sanitizeProgress(readJson(STORAGE.progress, progress));
+  mistakes = sanitizeObject(readJson(STORAGE.mistakes, {}));
+  favorites = sanitizeObject(readJson(STORAGE.favorites, {}));
+}
+
+function sanitizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function sanitizeProgress(value) {
+  const source = sanitizeObject(value);
+  return {
+    answered: sanitizeObject(source.answered),
+    xp: Number(source.xp) || 0,
+    level: Number(source.level) || 1,
+    achievements: sanitizeObject(source.achievements),
+    studyLog: sanitizeObject(source.studyLog),
+  };
+}
+
+function migrateLegacyData() {
+  const old = readJson(LEGACY_DATA_KEY, null);
+  if (!old || typeof old !== "object") return;
+  const migratedProgress = {
+    answered: sanitizeObject(old.answered),
+    xp: Number(old.xp) || 0,
+    level: Number(old.level) || 1,
+    achievements: sanitizeObject(old.achievements),
+    studyLog: sanitizeObject(old.studyLog),
+  };
+  const migratedMistakes = {};
+  (old.wrongList || []).forEach((id) => {
+    const record = migratedProgress.answered[id] || {};
+    migratedMistakes[id] = {
+      wrongCount: Number(record.wrongCount) || 1,
+      lastWrongAt: record.timestamp ? new Date(record.timestamp).toISOString() : new Date().toISOString(),
+    };
+  });
+  writeJson(STORAGE.progress, migratedProgress);
+  writeJson(STORAGE.mistakes, migratedMistakes);
+  const oldTheme = localStorage.getItem(LEGACY_THEME_KEY);
+  if (oldTheme && !localStorage.getItem(STORAGE.theme)) localStorage.setItem(STORAGE.theme, oldTheme);
+}
+
+function saveProgress() {
+  writeJson(STORAGE.progress, progress);
+}
+
+function saveMistakes() {
+  const valid = Object.fromEntries(Object.entries(mistakes).filter(([id]) => questionById(id)));
+  mistakes = valid;
+  writeJson(STORAGE.mistakes, mistakes);
+}
+
+function saveFavorites() {
+  const valid = Object.fromEntries(Object.entries(favorites).filter(([id]) => questionById(id)));
+  favorites = valid;
+  writeJson(STORAGE.favorites, favorites);
 }
 
 function checkIn() {
-  if (!studyLog[todayStr]) {
-    studyLog[todayStr] = { count: 0, correct: 0, wrong: 0, time: 0 };
-  }
-  saveData();
+  if (!progress.studyLog[todayStr]) progress.studyLog[todayStr] = { count: 0, correct: 0, wrong: 0, time: 0 };
+  saveProgress();
 }
 
-// ===== 章节 & 筛选 =====
-function buildChapterFilter() {
-  const sel = document.getElementById('chapterFilter');
-  const chNames = {
-    1: '半导体物理基础与晶体结构',
-    2: '载流子统计与热平衡',
-    3: '载流子输运、复合与连续性方程',
-    4: 'PN 结基础与结特性',
-    5: '金属-半导体接触与肖特基器件',
-    6: '双极型晶体管与结型器件',
-    7: 'MOS 电容与表面物理',
-    8: 'MOSFET 工作原理与电流模型',
-    9: '先进 MOSFET、短沟道与可靠性',
-    10: '光电子器件与太阳能电池',
-    11: '功率器件、高频器件与异质结器件',
-    12: '工艺、表征与综合分析'
-  };
-  const chapters = new Set(questions.map(q => q.chapter));
-  [...chapters].sort((a, b) => a - b).forEach(ch => {
-    const opt = document.createElement('option');
-    opt.value = ch;
-    opt.textContent = '第' + ch + '章 · ' + (chNames[ch] || '');
-    sel.appendChild(opt);
-  });
+function questionById(id) {
+  const numeric = Number(id);
+  return questions.find((q) => q.id === numeric);
 }
 
-function applyFilters() {
-  const ch = parseInt(document.getElementById('chapterFilter').value);
-  const modeF = document.getElementById('modeFilter').value;
-  let filtered = questions.filter(q => ch === 0 || q.chapter === ch);
-  const searchTerm = document.getElementById('searchInput').value.trim().toLowerCase();
-  if (searchTerm) {
-    filtered = filtered.filter(q =>
-      q.question_text.toLowerCase().includes(searchTerm) ||
-      q.explanation.toLowerCase().includes(searchTerm) ||
-      q.formula.toLowerCase().includes(searchTerm) ||
-      (q.tags && q.tags.some(t => t.toLowerCase().includes(searchTerm)))
-    );
-  }
-  if (modeF === 'wrong') {
-    const wrongIds = [...wrongSet];
-    filtered = filtered.filter(q => wrongIds.includes(q.id));
-    filtered.sort((a, b) => {
-      const aCnt = answered[a.id] ? (answered[a.id].wrongCount || 0) : 0;
-      const bCnt = answered[b.id] ? (answered[b.id].wrongCount || 0) : 0;
-      return bCnt - aCnt;
-    });
-  } else if (modeF === 'random') {
-    filtered = [...filtered];
-    for (let i = filtered.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
-    }
-  }
-  currentIds = filtered.map(q => q.id);
-  currentIndex = 0;
-  if (currentIds.length === 0) {
-    document.getElementById('qText').textContent = '😅 没有符合条件的题目';
-    document.getElementById('optionsContainer').innerHTML = '';
-    return;
-  }
-  if (started) {
-    showQuestion(currentIndex);
-  } else {
-    showWelcome();
-  }
-  updateStats();
+function questionsByChapter(chapterId) {
+  const numeric = Number(chapterId);
+  return numeric ? questions.filter((q) => q.chapter === numeric) : questions;
 }
 
-function applyFilterFromSettings() {
-  document.getElementById('chapterFilter').value = document.getElementById('chapterFilterSettings').value;
-  document.getElementById('modeFilter').value = document.getElementById('modeFilterSettings').value;
-  applyFilters();
-  if (!started) showWelcome();
+function completedCount(sourceQuestions) {
+  return sourceQuestions.filter((q) => progress.answered[q.id]).length;
 }
 
-// ===== 搜索 =====
-function onSearch() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    applyFilters();
-    showSearchDropdown();
-  }, 300);
+function isFavorite(question) {
+  return Boolean(favorites[question.id]);
 }
 
-function showSearchDropdown() {
-  const input = document.getElementById('searchInput');
-  const results = document.getElementById('searchResults');
-  const term = input.value.trim().toLowerCase();
-  if (!term) { results.classList.remove('show'); return; }
-  const matched = questions.filter(q =>
-    q.question_text.toLowerCase().includes(term) ||
-    q.explanation.toLowerCase().includes(term)
-  ).slice(0, 10);
-  if (matched.length === 0) { results.classList.remove('show'); return; }
-  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  results.innerHTML = matched.map(q => {
-    const hl = q.question_text.replace(new RegExp(escaped, 'gi'), m => '<mark>' + m + '</mark>');
-    return '<div class="sr-item" onclick="goToQuestion(' + q.id + ')"><span class="sr-num">#' + q.id + '</span>' + hl + '<span class="sr-chapter">第' + q.chapter + '章</span></div>';
-  }).join('');
-  results.classList.add('show');
+function favoriteButton(question) {
+  const saved = isFavorite(question);
+  return `<button class="button secondary ${saved ? "favorited" : ""}" data-action="toggle-favorite" data-question-id="${question.id}">${
+    saved ? "已收藏" : "收藏"
+  }</button>`;
 }
 
-document.addEventListener('click', function (e) {
-  const box = document.querySelector('.search-box');
-  if (box && !box.contains(e.target)) {
-    document.getElementById('searchResults').classList.remove('show');
-  }
-});
-
-function goToQuestion(id) {
-  const idx = currentIds.indexOf(id);
-  if (idx !== -1) {
-    currentIndex = idx;
-    showQuestion(currentIndex);
-  }
-  document.getElementById('searchInput').value = '';
-  document.getElementById('searchResults').classList.remove('show');
+function toggleFavorite(question) {
+  if (!question) return;
+  if (favorites[question.id]) delete favorites[question.id];
+  else favorites[question.id] = { savedAt: new Date().toISOString() };
+  saveFavorites();
+  updateGlobalStats();
+  renderActiveView();
 }
 
-// ===== 渲染题目 =====
-function showQuestion(index) {
-  if (!currentIds.length) return;
-  const id = currentIds[index];
-  const q = questions.find(x => x.id === id);
-  if (!q) return;
-  document.getElementById('qNum').textContent = '第 ' + (index + 1) + ' / ' + currentIds.length + ' 题';
-  document.getElementById('qChapter').textContent = q.chapter_name;
-  document.getElementById('qText').textContent = q.question_text;
-  if (mode === 'choice') {
-    document.getElementById('choiceArea').style.display = 'block';
-    document.getElementById('flipArea').style.display = 'none';
-    renderOptions(q);
-  } else {
-    document.getElementById('choiceArea').style.display = 'none';
-    document.getElementById('flipArea').style.display = 'block';
-    renderFlip(q);
-  }
-  document.getElementById('prevBtn').disabled = index === 0;
-  document.getElementById('nextBtn').disabled = index >= currentIds.length - 1;
-  updateStats();
+function selectedLabel(index) {
+  return Number.isInteger(index) && LABELS[index] ? LABELS[index] : "未作答";
 }
 
-// ===== 选择题模式 =====
-function renderOptions(q) {
-  const container = document.getElementById('optionsContainer');
-  const feedback = document.getElementById('feedback');
-  feedback.classList.remove('show', 'correct', 'wrong');
-  const labels = ['A', 'B', 'C', 'D'];
-  const answeredInfo = answered[q.id];
-  container.innerHTML = q.options.map((opt, idx) => {
-    let cls = 'option-btn';
-    let disabled = '';
-    if (answeredInfo) {
-      disabled = 'disabled';
-      if (idx === q.correct) cls += ' correct';
-      else if (idx === answeredInfo.selected) cls += ' wrong';
-      else cls += ' disabled';
-    }
-    return '<button class="' + cls + '" ' + disabled + ' onclick="selectOption(' + q.id + ',' + idx + ')"><span class="label">' + labels[idx] + '.</span>' + escapeHtml(opt) + '</button>';
-  }).join('');
-  if (answeredInfo && answeredInfo.selected !== undefined) {
-    showFeedback(q, answeredInfo.selected === q.correct);
-  }
+function correctLabel(question) {
+  return selectedLabel(question.correct);
 }
 
-function escapeHtml(text) {
-  const d = document.createElement('div');
-  d.textContent = text;
-  return d.innerHTML;
-}
-
-function selectOption(qId, selectedIdx) {
-  const q = questions.find(x => x.id === qId);
-  if (!q || answered[qId]) return;
-  const isCorrect = selectedIdx === q.correct;
-  answered[qId] = {
-    selected: selectedIdx,
-    correct: isCorrect,
+function recordAnswer(question, correct, payload = {}) {
+  const previous = progress.answered[question.id] || {};
+  progress.answered[question.id] = {
+    ...previous,
+    ...payload,
+    correct,
     timestamp: Date.now(),
-    wrongCount: answered[qId] ? (answered[qId].wrongCount || 0) : 0
+    wrongCount: correct ? Number(previous.wrongCount) || 0 : (Number(previous.wrongCount) || 0) + 1,
   };
-  if (!isCorrect) {
-    answered[qId].wrongCount = (answered[qId].wrongCount || 0) + 1;
-    wrongSet.add(qId);
-  }
-  logStudy(isCorrect);
-  addXP(isCorrect ? 10 : 2);
-  renderOptions(q);
-  updateStats();
-  saveData();
-  if (isCorrect) {
-    showToast('✅ 回答正确！+10 XP');
-    if (Math.random() < 0.1) spawnConfetti();
+  if (correct) {
+    if (state.practice?.removeOnCorrect) delete mistakes[question.id];
   } else {
-    showToast('❌ 答错了，看看解析吧 +2 XP');
+    mistakes[question.id] = {
+      wrongCount: progress.answered[question.id].wrongCount,
+      lastWrongAt: new Date().toISOString(),
+    };
   }
+  logStudy(correct);
+  addXP(correct ? 10 : 2);
+  saveProgress();
+  saveMistakes();
+  updateGlobalStats();
 }
 
-function showFeedback(q, isCorrect) {
-  const fb = document.getElementById('feedback');
-  fb.className = 'feedback show ' + (isCorrect ? 'correct' : 'wrong');
-  document.getElementById('fbTitle').textContent = isCorrect ? '✅ 回答正确！' : '❌ 回答错误';
-  document.getElementById('fbFormula').textContent = '📐 ' + q.formula;
-  document.getElementById('fbExplanation').textContent = '📖 ' + q.explanation;
-}
-
-// ===== 翻转卡片模式 =====
-function renderFlip(q) {
-  const card = document.getElementById('flipCard');
-  card.classList.remove('flipped');
-  document.getElementById('flipQText').textContent = q.question_text;
-  document.getElementById('flipAnswer').textContent = q.short_answer;
-  document.getElementById('flipFormula').textContent = '📐 ' + q.formula;
-  document.getElementById('flipExplanation').textContent = '📖 ' + q.explanation;
-}
-
-function flipCard() {
-  const card = document.getElementById('flipCard');
-  card.classList.toggle('flipped');
-  if (card.classList.contains('flipped')) addXP(1);
-}
-
-function selfEval(level) {
-  if (!currentIds.length) return;
-  const qId = currentIds[currentIndex];
-  if (!answered[qId]) {
-    answered[qId] = { selfEval: level, timestamp: Date.now(), wrongCount: 0 };
-  } else {
-    answered[qId].selfEval = level;
-  }
-  if (level === 'hard') { wrongSet.add(qId); answered[qId].correct = false; }
-  else if (level === 'easy') { answered[qId].correct = true; }
-  const xpGain = level === 'easy' ? 5 : level === 'medium' ? 3 : 1;
-  addXP(xpGain);
-  logStudy(level !== 'hard');
-  saveData();
-  updateStats();
-  const msgs = {
-    easy: '😊 已掌握！+5 XP',
-    medium: '🤔 继续加油！+3 XP',
-    hard: '😵 标记为不会，已加入错题本 +1 XP'
-  };
-  showToast(msgs[level]);
-}
-
-// ===== 导航 =====
-function navigate(dir) {
-  const newIdx = currentIndex + dir;
-  if (newIdx < 0 || newIdx >= currentIds.length) return;
-  currentIndex = newIdx;
-  showQuestion(currentIndex);
-}
-
-function setMode(m) {
-  mode = m;
-  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
-  if (currentIds.length) showQuestion(currentIndex);
-}
-
-// ===== 学习记录 & XP =====
-function logStudy(isCorrect) {
-  if (!studyLog[todayStr]) studyLog[todayStr] = { count: 0, correct: 0, wrong: 0, time: 0 };
-  studyLog[todayStr].count++;
-  if (isCorrect) studyLog[todayStr].correct++;
-  else studyLog[todayStr].wrong++;
-  saveData();
-  updateTodaySummary();
+function logStudy(correct) {
+  if (!progress.studyLog[todayStr]) progress.studyLog[todayStr] = { count: 0, correct: 0, wrong: 0, time: 0 };
+  progress.studyLog[todayStr].count += 1;
+  if (correct) progress.studyLog[todayStr].correct += 1;
+  else progress.studyLog[todayStr].wrong += 1;
 }
 
 function addXP(amount) {
-  xp += amount;
-  const newLevel = Math.floor(Math.sqrt(xp / 50)) + 1;
-  if (newLevel > level) {
-    level = newLevel;
-    showToast('🎉 升级！达到 Lv.' + level);
+  progress.xp += amount;
+  const nextLevel = Math.floor(Math.sqrt(progress.xp / 50)) + 1;
+  if (nextLevel > progress.level) {
+    progress.level = nextLevel;
+    showToast(`升级到 Lv.${progress.level}`);
     spawnConfetti();
+  } else {
+    progress.level = nextLevel;
   }
-  level = newLevel;
-  updateXPBar();
-  saveData();
-}
-
-function updateXPBar() {
-  const xpForNext = level * level * 50;
-  const xpForCurrent = (level - 1) * (level - 1) * 50;
-  const progress = (xp - xpForCurrent) / (xpForNext - xpForCurrent) * 100;
-  document.getElementById('xpFill').style.width = Math.min(100, Math.max(0, progress)) + '%';
-  document.getElementById('xpText').textContent = xp + ' XP';
-  document.getElementById('levelBadge').textContent = 'Lv.' + level;
-}
-
-// ===== 统计更新 =====
-function updateStats() {
-  const total = currentIds.length;
-  const done = currentIds.filter(id => answered[id] && (answered[id].correct !== undefined || answered[id].selfEval)).length;
-  const correct = currentIds.filter(id => answered[id] && answered[id].correct === true).length;
-  const rate = done > 0 ? Math.round(correct / done * 100) : 0;
-  document.getElementById('progressNum').textContent = done + ' / ' + total;
-  document.getElementById('correctNum').textContent = correct;
-  document.getElementById('rateNum').textContent = rate + '%';
-  document.getElementById('progressFill').style.width = (total > 0 ? done / total * 100 : 0) + '%';
-  document.getElementById('wrongCount').textContent = wrongSet.size;
-  updateWrongList();
-  updateXPBar();
   updateAchievements();
 }
 
-function updateWrongList() {
-  const list = document.getElementById('wrongList');
-  const wrongIds = [...wrongSet];
-  if (wrongIds.length === 0) {
-    list.innerHTML = '<li style="color:var(--text2);text-align:center;padding:20px">🎉 暂无错题，太棒了！</li>';
-    return;
-  }
-  list.innerHTML = wrongIds.slice(0, 30).map(id => {
-    const q = questions.find(x => x.id === id);
-    if (!q) return '';
-    return '<li onclick="goToQuestion(' + id + ')">#' + id + ' ' + q.question_text.slice(0, 40) + '...</li>';
-  }).join('');
-  if (wrongIds.length > 30) {
-    list.innerHTML += '<li style="text-align:center;color:var(--text2)">还有更多...</li>';
-  }
+function updateAchievements() {
+  const totalAnswered = Object.keys(progress.answered).length;
+  const totalCorrect = Object.values(progress.answered).filter((item) => item.correct === true).length;
+  const streak = calcStreak();
+  const all = achievementDefinitions();
+  all.forEach((ach) => {
+    if (!progress.achievements[ach.id] && ach.check({ totalAnswered, totalCorrect, streak, level: progress.level })) {
+      progress.achievements[ach.id] = Date.now();
+      showToast(`解锁成就：${ach.name}`);
+      spawnConfetti();
+    }
+  });
 }
 
-// ===== 学习日历 =====
+function achievementDefinitions() {
+  return [
+    { id: "first", name: "初出茅庐", check: (s) => s.totalAnswered >= 1 },
+    { id: "ten", name: "小试牛刀", check: (s) => s.totalAnswered >= 10 },
+    { id: "fifty", name: "渐入佳境", check: (s) => s.totalAnswered >= 50 },
+    { id: "hundred", name: "百题斩", check: (s) => s.totalAnswered >= 100 },
+    { id: "all", name: "全题通关", check: (s) => s.totalAnswered >= questions.length },
+    { id: "streak3", name: "三日不辍", check: (s) => s.streak >= 3 },
+    { id: "streak7", name: "持之以恒", check: (s) => s.streak >= 7 },
+    { id: "perfect", name: "十连全对", check: (s) => s.totalCorrect >= 10 && s.totalCorrect === s.totalAnswered },
+    { id: "level5", name: "Lv.5 达人", check: (s) => s.level >= 5 },
+    { id: "level10", name: "Lv.10 大师", check: (s) => s.level >= 10 },
+  ];
+}
+
+function showView(name) {
+  state.view = name;
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
+  document.querySelectorAll(".nav-button").forEach((button) => button.classList.toggle("active", button.dataset.view === name));
+  const target = document.getElementById(name === "chapter" ? "chapterView" : `${name}View`);
+  if (target) target.classList.add("active-view");
+  $("#sidebar").classList.remove("open");
+  renderActiveView();
+}
+
+function renderActiveView() {
+  updateGlobalStats();
+  if (state.view === "home") renderHome();
+  if (state.view === "chapter") renderChapterPicker();
+  if (state.view === "practice") renderPractice();
+  if (state.view === "exam") renderExamSetup();
+  if (state.view === "mistakes") renderMistakes();
+  if (state.view === "favorites") renderFavorites();
+  if (state.view === "search") renderSearch();
+  if (state.view === "backup") renderBackup();
+  if (state.view === "config") renderConfigSafe();
+  if (state.view === "result") renderPracticeResult();
+}
+
+function updateGlobalStats() {
+  $("#statTotal").textContent = String(questions.length);
+  $("#statMistakes").textContent = String(Object.keys(mistakes).length);
+  $("#statFavorites").textContent = String(Object.keys(favorites).length);
+  $("#statLevel").textContent = `Lv.${progress.level}`;
+}
+
+function renderHome() {
+  const answeredCount = Object.keys(progress.answered).length;
+  const correctCount = Object.values(progress.answered).filter((item) => item.correct === true).length;
+  const rate = answeredCount ? Math.round((correctCount / answeredCount) * 100) : 0;
+  const xpForNext = progress.level * progress.level * 50;
+  const xpForCurrent = (progress.level - 1) * (progress.level - 1) * 50;
+  const xpRate = Math.max(0, Math.min(100, ((progress.xp - xpForCurrent) / (xpForNext - xpForCurrent)) * 100));
+  $("#homeView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>今天刷哪一块？</h2>
+        <p>按章节补基础，用随机考试查漏，翻转卡适合背公式和概念。</p>
+      </div>
+      <div class="top-actions">
+        <button class="button secondary" data-action="set-theme" data-theme="day">白天</button>
+        <button class="button secondary" data-action="set-theme" data-theme="night">夜晚</button>
+      </div>
+    </div>
+    <div class="grid stats-grid" style="margin-bottom:14px">
+      <section class="card stat-card"><div><h3>已完成</h3><strong>${answeredCount}/${questions.length}</strong><p>累计做过的题目</p></div></section>
+      <section class="card stat-card"><div><h3>正确率</h3><strong>${rate}%</strong><p>${correctCount} 道答对</p></div></section>
+      <section class="card stat-card"><div><h3>经验等级</h3><strong>Lv.${progress.level}</strong><p>${progress.xp} XP</p></div></section>
+      <section class="card stat-card"><div><h3>错题收藏</h3><strong>${Object.keys(mistakes).length}/${Object.keys(favorites).length}</strong><p>错题 / 收藏</p></div></section>
+    </div>
+    <section class="panel xp-line" style="margin-bottom:14px">
+      <div class="chapter-meta">
+        <span class="pill">当前 XP ${progress.xp}</span>
+        <span class="pill">下一级 ${xpForNext}</span>
+        <span class="pill">连续学习 ${calcStreak()} 天</span>
+      </div>
+      <div class="progress-track"><span style="width:${xpRate}%"></span></div>
+    </section>
+    <div class="grid mode-grid">
+      <article class="card mode-card">
+        <h3>章节刷题</h3>
+        <p>按半导体器件物理章节推进，选择题即时反馈，也可以切到翻转卡复习。</p>
+        <div class="chapter-meta"><span class="pill">${chapters.length} 个章节</span><span class="pill">${questions.length} 题</span></div>
+        <button class="button" data-action="go-chapter">开始章节刷题</button>
+      </article>
+      <article class="card mode-card">
+        <h3>随机考试</h3>
+        <p>随机抽题、计时交卷，结束后统一看错题和答案解析。</p>
+        <div class="chapter-meta"><span class="pill">可选题量</span><span class="pill">答题卡</span></div>
+        <button class="button" data-action="go-exam">进入考试</button>
+      </article>
+      <article class="card mode-card">
+        <h3>错题本</h3>
+        <p>答错或卡片标记“不会”的题会自动收进来，答对可移出。</p>
+        <div class="chapter-meta"><span class="pill">${Object.keys(mistakes).length} 道错题</span></div>
+        <button class="button" data-action="go-mistakes">查看错题</button>
+      </article>
+      <article class="card mode-card">
+        <h3>收藏题库</h3>
+        <p>把公式、概念、易混题收起来，考前集中重做。</p>
+        <div class="chapter-meta"><span class="pill">${Object.keys(favorites).length} 道收藏</span></div>
+        <button class="button" data-action="go-favorites">查看收藏</button>
+      </article>
+      <article class="card mode-card">
+        <h3>学习面板</h3>
+        <p>查看今日总结、学习日历和成就，适合每天收尾复盘。</p>
+        <button class="button" data-action="show-study-panel">查看统计</button>
+      </article>
+      <article class="card mode-card">
+        <h3>AI 与备份</h3>
+        <p>配置 AI 解析题目；导出本地备份或同步到 GitHub Gist。</p>
+        <div class="chapter-meta"><span class="pill">${getAiConfig().model || "AI 未配置"}</span></div>
+        <button class="button" data-action="go-config">配置 AI</button>
+      </article>
+    </div>
+    <div class="grid mode-grid" style="margin-top:14px">
+      ${renderStudyPanel()}
+    </div>
+  `;
+}
+
+function renderStudyPanel() {
+  const today = progress.studyLog[todayStr] || { count: 0, correct: 0, wrong: 0, time: 0 };
+  const elapsed = Math.floor((Date.now() - sessionStart) / 60000);
+  const totalTime = (today.time || 0) + elapsed;
+  const todayRate = today.count ? Math.round((today.correct / today.count) * 100) : 0;
+  return `
+    <section class="card">
+      <h3>今日总结</h3>
+      <div class="summary-list">
+        <div class="summary-item"><span class="label">答题</span><span class="value">${today.count} 题</span></div>
+        <div class="summary-item"><span class="label">正确</span><span class="value">${today.correct} 题</span></div>
+        <div class="summary-item"><span class="label">正确率</span><span class="value">${todayRate}%</span></div>
+        <div class="summary-item"><span class="label">新增错题</span><span class="value">${today.wrong} 题</span></div>
+        <div class="summary-item"><span class="label">学习时长</span><span class="value">${totalTime} 分钟</span></div>
+      </div>
+    </section>
+    <section class="card">
+      <h3>学习日历</h3>
+      ${renderCalendar()}
+    </section>
+    <section class="card">
+      <h3>成就</h3>
+      <div class="achievements">
+        ${achievementDefinitions()
+          .map((ach) => `<span class="ach ${progress.achievements[ach.id] ? "" : "locked"}">${progress.achievements[ach.id] ? ach.name : "未解锁"}</span>`)
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderCalendar() {
-  const container = document.getElementById('calendarContainer');
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-  let html = '<div style="text-align:center;font-weight:700;margin-bottom:8px">' + year + '年 ' + monthNames[month] + '</div>';
-  html += '<table class="calendar"><tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr><tr>';
-  for (let i = 0; i < firstDay; i++) html += '<td class="empty"></td>';
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  let html = `<table class="calendar"><tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr><tr>`;
+  for (let i = 0; i < firstDay; i += 1) html += "<td></td>";
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const hasStudy = progress.studyLog[dateStr]?.count > 0;
     const isToday = dateStr === todayStr;
-    const hasStudy = studyLog[dateStr] && studyLog[dateStr].count > 0;
-    let cls = '';
-    if (hasStudy) cls += ' learned';
-    if (isToday) cls += ' today';
-    html += '<td class="' + cls + '">' + day + '</td>';
-    if ((firstDay + day) % 7 === 0) html += '</tr><tr>';
+    html += `<td class="${hasStudy ? "learned" : ""} ${isToday ? "today" : ""}">${day}</td>`;
+    if ((firstDay + day) % 7 === 0) html += "</tr><tr>";
   }
-  html += '</tr></table>';
-  const studyDays = Object.keys(studyLog).filter(d => studyLog[d].count > 0).length;
-  const streak = calcStreak();
-  html += '<div style="text-align:center;margin-top:8px;font-size:.85em;color:var(--text2)">📆 本月学习 ' + studyDays + ' 天 · 连续 ' + streak + ' 天</div>';
-  container.innerHTML = html;
+  html += "</tr></table>";
+  html += `<p class="muted">本月学习 ${Object.keys(progress.studyLog).filter((d) => progress.studyLog[d]?.count > 0).length} 天 · 连续 ${calcStreak()} 天</p>`;
+  return html;
 }
 
 function calcStreak() {
   let streak = 0;
   const d = new Date();
   while (true) {
-    const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    if (studyLog[ds] && studyLog[ds].count > 0) { streak++; d.setDate(d.getDate() - 1); }
-    else break;
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (progress.studyLog[ds]?.count > 0) {
+      streak += 1;
+      d.setDate(d.getDate() - 1);
+    } else {
+      break;
+    }
   }
   return streak;
 }
 
-// ===== 今日总结 =====
-function updateTodaySummary() {
-  const today = studyLog[todayStr] || { count: 0, correct: 0, wrong: 0, time: 0 };
-  document.getElementById('sTodayCount').textContent = today.count + ' 题';
-  document.getElementById('sTodayCorrect').textContent = today.correct + ' 题';
-  const rate = today.count > 0 ? Math.round(today.correct / today.count * 100) : 0;
-  document.getElementById('sTodayRate').textContent = rate + '%';
-  document.getElementById('sTodayWrong').textContent = today.wrong + ' 题';
-  const elapsed = Math.floor((Date.now() - sessionStart) / 60000);
-  const totalTime = (today.time || 0) + elapsed;
-  document.getElementById('sTodayTime').textContent = totalTime + ' 分钟';
-  renderCalendar();
-}
-
-setInterval(updateTodaySummary, 60000);
-
-// ===== 成就系统 =====
-function updateAchievements() {
-  const list = document.getElementById('achievementList');
-  const totalAnswered = Object.keys(answered).length;
-  const totalCorrect = Object.values(answered).filter(a => a.correct === true).length;
-  const streak = calcStreak();
-  const allAch = [
-    { id: 'first', name: '🎯 初出茅庐', check: () => totalAnswered >= 1 },
-    { id: 'ten', name: '💪 小试牛刀', check: () => totalAnswered >= 10 },
-    { id: 'fifty', name: '🔥 渐入佳境', check: () => totalAnswered >= 50 },
-    { id: 'hundred', name: '⚡ 百题斩', check: () => totalAnswered >= 100 },
-    { id: 'all', name: '👑 满腹经纶', check: () => totalAnswered >= 300 },
-    { id: 'streak3', name: '📆 三日不辍', check: () => streak >= 3 },
-    { id: 'streak7', name: '📆 持之以恒', check: () => streak >= 7 },
-    { id: 'perfect', name: '🌟 完美无缺', check: () => totalCorrect >= 10 && Math.abs(totalCorrect / (totalAnswered || 1) - 1) < 0.01 },
-    { id: 'level5', name: '🌈 Lv.5 达人', check: () => level >= 5 },
-    { id: 'level10', name: '🏅 Lv.10 大师', check: () => level >= 10 },
-  ];
-  allAch.forEach(ach => {
-    if (!achievements[ach.id] && ach.check()) {
-      achievements[ach.id] = Date.now();
-      showToast('🏆 解锁成就：' + ach.name);
-      spawnConfetti();
-    }
+function renderChapterPicker() {
+  const cards = [{ id: 0, name: "全部章节", count: questions.length }, ...chapters].map((chapter) => {
+    const pool = questionsByChapter(chapter.id);
+    return { ...chapter, count: pool.length, completed: completedCount(pool), mistakes: pool.filter((q) => mistakes[q.id]).length };
   });
-  list.innerHTML = allAch.map(ach => {
-    const unlocked = !!achievements[ach.id];
-    return '<span class="ach ' + (unlocked ? '' : 'locked') + '">' + (unlocked ? ach.name : '🔒 ???') + '</span>';
-  }).join('');
-  saveData();
+  $("#chapterView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>章节刷题</h2>
+        <p>选择一个章节后，可以做选择题，也可以用翻转卡片背诵概念、公式和结论。</p>
+      </div>
+    </div>
+    <div class="grid chapter-grid">
+      ${cards
+        .map(
+          (chapter) => `
+        <article class="card chapter-card">
+          <h3>${escapeHtml(chapter.name)}</h3>
+          <p>已刷 ${chapter.completed} / ${chapter.count} 题</p>
+          <div class="chapter-meta">
+            <span class="pill">错题 ${chapter.mistakes}</span>
+            <span class="pill">${chapter.id ? `第 ${chapter.id} 章` : "全题库"}</span>
+          </div>
+          <div class="chapter-actions">
+            <button class="button" data-action="start-chapter" data-chapter="${chapter.id}" data-mode="choice">选择练习</button>
+            <button class="button secondary" data-action="start-chapter" data-chapter="${chapter.id}" data-mode="flip">卡片复习</button>
+            <button class="button secondary" data-action="start-chapter" data-chapter="${chapter.id}" data-mode="random">随机刷</button>
+          </div>
+        </article>
+      `
+        )
+        .join("")}
+    </div>
+  `;
 }
 
-// ===== 欢迎页 & 开始学习 =====
-function showWelcome() {
-  document.getElementById('welcomeCard').style.display = 'flex';
-  document.getElementById('questionCard').style.display = 'none';
-  started = false;
-  const q = questions;
-  document.getElementById('welcomeTotal').textContent = '📚 ' + q.length + ' 道题目';
-  const ch = parseInt(document.getElementById('chapterFilter').value);
-  const chNames = {
-    1: '半导体物理基础', 2: '载流子统计', 3: '载流子输运',
-    4: 'PN 结', 5: '肖特基接触', 6: 'BJT',
-    7: 'MOS 电容', 8: 'MOSFET', 9: '先进 MOSFET',
-    10: '光电子', 11: '功率器件', 12: '工艺表征'
+function startChapterPractice(chapterId, practiceMode) {
+  let pool = questionsByChapter(chapterId);
+  if (practiceMode === "random") pool = shuffle(pool);
+  const chapter = chapterId ? chapters.find((item) => item.id === Number(chapterId))?.name : "全部章节";
+  startPractice(`${chapter || "章节"} · ${practiceMode === "flip" ? "卡片复习" : "选择练习"}`, pool, {
+    mode: practiceMode === "flip" ? "flip" : "choice",
+    returnView: "chapter",
+    kind: "chapter",
+  });
+}
+
+function startPractice(title, sourceQuestions, options = {}) {
+  state.practice = {
+    title,
+    questions: [...sourceQuestions],
+    index: 0,
+    records: {},
+    mode: options.mode || "choice",
+    flipped: false,
+    removeOnCorrect: Boolean(options.removeOnCorrect),
+    returnView: options.returnView || "chapter",
+    kind: options.kind || "practice",
   };
-  document.getElementById('welcomeChapter').textContent = ch === 0 ? '📂 全部章节' : '📂 第' + ch + '章 ' + (chNames[ch] || '');
+  showPractice();
 }
 
-function startLearning() {
-  started = true;
-  document.getElementById('welcomeCard').style.display = 'none';
-  document.getElementById('questionCard').style.display = 'block';
-  if (currentIds.length > 0) showQuestion(0);
+function showPractice() {
+  state.view = "practice";
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
+  document.querySelectorAll(".nav-button").forEach((button) => button.classList.remove("active"));
+  $("#practiceView").classList.add("active-view");
+  renderPractice();
 }
 
-// ===== 主题切换 =====
-function setTheme(theme) {
-  currentTheme = theme;
-  if (theme === 'night') {
-    document.documentElement.setAttribute('data-theme', 'night');
-  } else {
-    document.documentElement.removeAttribute('data-theme');
+function getPracticeRecord(question) {
+  if (!state.practice.records[question.id]) state.practice.records[question.id] = { checked: false, selected: null, correct: false, selfEval: "" };
+  return state.practice.records[question.id];
+}
+
+function renderPractice() {
+  const practice = state.practice;
+  if (!practice || !practice.questions.length) {
+    $("#practiceView").innerHTML = `<div class="empty">这里暂时没有题目。</div>`;
+    return;
   }
-  localStorage.setItem('semiquiz_theme', theme);
-  const sel = document.getElementById('themeSelect');
-  if (sel) sel.value = theme;
+  const question = practice.questions[practice.index];
+  const record = getPracticeRecord(question);
+  const progressPct = Math.round(((practice.index + 1) / practice.questions.length) * 100);
+  $("#practiceView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>${escapeHtml(practice.title)}</h2>
+        <p>第 ${practice.index + 1} / ${practice.questions.length} 题 · ${escapeHtml(question.chapterName)}</p>
+      </div>
+      <button class="button secondary" data-action="back-practice">返回</button>
+    </div>
+    <div class="panel question-shell">
+      <div class="progress-track"><span style="width:${progressPct}%"></span></div>
+      <div class="mode-switch" role="group" aria-label="刷题模式">
+        <button class="filter-button ${practice.mode === "choice" ? "active" : ""}" data-action="set-practice-mode" data-mode="choice">选择题</button>
+        <button class="filter-button ${practice.mode === "flip" ? "active" : ""}" data-action="set-practice-mode" data-mode="flip">翻转卡片</button>
+      </div>
+      ${practice.mode === "flip" ? renderFlipQuestion(question, record) : renderChoiceQuestion(question, record)}
+      <div class="answer-actions">
+        <button class="button secondary" data-action="prev-practice" ${practice.index === 0 ? "disabled" : ""}>上一题</button>
+        ${practice.mode === "choice" ? `<button class="button" data-action="check-practice" ${record.checked ? "disabled" : ""}>提交本题</button>` : ""}
+        ${favoriteButton(question)}
+        <button class="button secondary" data-action="ai-explain" data-question-id="${question.id}">${aiActionLabel(question)}</button>
+        ${aiRedoButton(question)}
+        <button class="button secondary" data-action="next-practice">${practice.index + 1 === practice.questions.length ? "完成" : "下一题"}</button>
+      </div>
+      ${renderAiPanel(question, practice.mode === "choice" ? selectedLabel(record.selected) : record.selfEval || "未自评")}
+    </div>
+  `;
+}
+
+function renderChoiceQuestion(question, record) {
+  return `
+    <div class="question-top"><span>第 ${question.chapter} 章</span><span>正确答案 ${correctLabel(question)}</span></div>
+    <h3 class="question-title">${escapeHtml(question.question)}</h3>
+    <div class="options">
+      ${question.options
+        .map((option, index) => {
+          const classes = ["option"];
+          if (record.selected === index) classes.push("selected");
+          if (record.checked && index === question.correct) classes.push("correct");
+          if (record.checked && record.selected === index && index !== question.correct) classes.push("wrong");
+          return `
+            <label class="${classes.join(" ")}">
+              <input type="radio" name="practice-answer-${question.id}" value="${index}" ${record.selected === index ? "checked" : ""} ${record.checked ? "disabled" : ""}>
+              <span><strong>${LABELS[index]}.</strong> ${escapeHtml(option)}</span>
+            </label>
+          `;
+        })
+        .join("")}
+    </div>
+    <div class="feedback ${record.checked ? "show" : ""} ${record.correct ? "ok" : "bad"}">
+      ${record.checked ? feedbackHtml(question, record.correct, selectedLabel(record.selected)) : ""}
+    </div>
+  `;
+}
+
+function renderFlipQuestion(question, record) {
+  return `
+    <div class="flip-card ${state.practice.flipped ? "flipped" : ""}" id="flipCard">
+      <div class="flip-card-inner">
+        <div class="flip-card-front">
+          <div class="question-top"><span>第 ${question.chapter} 章</span><span>${escapeHtml(question.chapterName)}</span></div>
+          <h3 class="question-title">${escapeHtml(question.question)}</h3>
+          <div class="flip-hint" data-action="flip-card">点击翻转 · 查看答案</div>
+        </div>
+        <div class="flip-card-back">
+          <div class="answer-label">答案要点</div>
+          <div class="answer-text">${escapeHtml(question.shortAnswer || question.options[question.correct] || "")}</div>
+          ${question.formula ? `<div class="formula-box">${escapeHtml(question.formula)}</div>` : ""}
+          <p>${escapeHtml(question.explanation)}</p>
+          <div class="self-eval">
+            <button class="review-button ${record.selfEval === "easy" ? "active" : ""}" data-action="self-eval" data-level="easy">会了</button>
+            <button class="review-button ${record.selfEval === "medium" ? "active" : ""}" data-action="self-eval" data-level="medium">模糊</button>
+            <button class="review-button ${record.selfEval === "hard" ? "active" : ""}" data-action="self-eval" data-level="hard">不会</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function feedbackHtml(question, correct, selected) {
+  return `
+    <strong>${correct ? "回答正确" : "回答错误"}</strong>
+    <p>你的答案：${escapeHtml(selected)} · 正确答案：${correctLabel(question)}</p>
+    ${question.formula ? `<div class="formula-box">${escapeHtml(question.formula)}</div>` : ""}
+    <p>${escapeHtml(question.explanation)}</p>
+  `;
+}
+
+function checkPracticeAnswer() {
+  const practice = state.practice;
+  if (!practice) return;
+  const question = practice.questions[practice.index];
+  const record = getPracticeRecord(question);
+  if (record.checked) return;
+  const selected = document.querySelector(`input[name="practice-answer-${question.id}"]:checked`);
+  if (!selected) {
+    showToast("请先选择一个答案。");
+    return;
+  }
+  record.selected = Number(selected.value);
+  record.correct = record.selected === question.correct;
+  record.checked = true;
+  recordAnswer(question, record.correct, { selected: record.selected });
+  if (record.correct) showToast("回答正确，+10 XP");
+  else showToast("答错了，已加入错题本。");
+  renderPractice();
+}
+
+function selfEval(level) {
+  const practice = state.practice;
+  if (!practice) return;
+  const question = practice.questions[practice.index];
+  const record = getPracticeRecord(question);
+  const correct = level !== "hard";
+  record.selfEval = level;
+  record.checked = true;
+  record.correct = correct;
+  recordAnswer(question, correct, { selfEval: level });
+  const messages = { easy: "已掌握，+10 XP", medium: "继续巩固，+10 XP", hard: "已加入错题本。" };
+  showToast(messages[level]);
+  renderPractice();
+}
+
+function nextPractice() {
+  const practice = state.practice;
+  if (!practice) return;
+  if (practice.index + 1 >= practice.questions.length) {
+    showPracticeResult();
+    return;
+  }
+  practice.index += 1;
+  practice.flipped = false;
+  renderPractice();
+}
+
+function prevPractice() {
+  const practice = state.practice;
+  if (!practice || practice.index === 0) return;
+  practice.index -= 1;
+  practice.flipped = false;
+  renderPractice();
+}
+
+function showPracticeResult() {
+  state.view = "result";
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
+  $("#resultView").classList.add("active-view");
+  renderPracticeResult();
+}
+
+function renderPracticeResult() {
+  const practice = state.practice;
+  if (!practice) return;
+  const records = Object.values(practice.records);
+  const answered = records.filter((r) => r.checked).length;
+  const correct = records.filter((r) => r.checked && r.correct).length;
+  const wrongQuestions = practice.questions.filter((q) => practice.records[q.id]?.checked && !practice.records[q.id].correct);
+  $("#resultView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>练习完成</h2>
+        <p>完成 ${answered} / ${practice.questions.length} 题，答对 ${correct} 题。</p>
+      </div>
+      <button class="button" data-action="${practice.returnView === "mistakes" ? "go-mistakes" : practice.returnView === "favorites" ? "go-favorites" : "go-chapter"}">返回</button>
+    </div>
+    <div class="result-list">
+      ${
+        wrongQuestions.length
+          ? wrongQuestions
+              .map(
+                (q) => `
+          <div class="result-row">
+            <div>
+              <strong>#${q.id} · ${escapeHtml(q.chapterName)}</strong>
+              <p class="muted">${escapeHtml(q.question)}</p>
+              <p>正确答案：${correctLabel(q)}</p>
+            </div>
+            <button class="button secondary" data-action="start-single-review" data-question-id="${q.id}">重做</button>
+          </div>
+        `
+              )
+              .join("")
+          : `<div class="empty">这组题没有错题。</div>`
+      }
+    </div>
+  `;
+}
+
+function renderExamSetup() {
+  const max = questions.length;
+  $("#examView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>随机考试</h2>
+        <p>从指定范围随机抽题，交卷后统一判分并记录错题。</p>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="grid setup-grid">
+        <div class="field">
+          <label for="examCount">题目数量</label>
+          <select id="examCount">
+            <option value="10">10 题</option>
+            <option value="20" selected>20 题</option>
+            <option value="50">50 题</option>
+            <option value="${max}">全部 ${max} 题</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="examMinutes">考试时间</label>
+          <input id="examMinutes" type="number" min="1" max="180" value="20">
+        </div>
+        <div class="field">
+          <label for="examChapter">范围</label>
+          <select id="examChapter">
+            <option value="0">全部章节</option>
+            ${chapters.map((chapter) => `<option value="${chapter.id}">第 ${chapter.id} 章 · ${escapeHtml(chapter.name)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="answer-actions" style="margin-top:16px">
+        <button class="button" data-action="start-exam">开始考试</button>
+      </div>
+    </div>
+  `;
+}
+
+function startExam() {
+  const count = Number($("#examCount").value);
+  const minutes = Number($("#examMinutes").value);
+  const chapter = Number($("#examChapter").value);
+  const pool = shuffle(questionsByChapter(chapter)).slice(0, Math.min(count, questionsByChapter(chapter).length));
+  state.exam = { questions: pool, index: 0, answers: {}, endsAt: Date.now() + minutes * 60 * 1000, submitted: false };
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(tickExam, 1000);
+  renderExam();
+}
+
+function tickExam() {
+  if (!state.exam) return;
+  if (Date.now() >= state.exam.endsAt) {
+    submitExam();
+    return;
+  }
+  const timer = $("#examTimer");
+  if (timer) timer.textContent = formatRemaining(state.exam.endsAt - Date.now());
+}
+
+function formatRemaining(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function renderExam() {
+  const exam = state.exam;
+  if (!exam || !exam.questions.length) {
+    $("#examView").innerHTML = `<div class="empty">没有可用于考试的题目。</div>`;
+    return;
+  }
+  state.view = "exam";
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
+  $("#examView").classList.add("active-view");
+  const question = exam.questions[exam.index];
+  const selected = exam.answers[question.id];
+  const answeredCount = Object.keys(exam.answers).filter((id) => exam.answers[id] !== undefined).length;
+  $("#examView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>随机考试</h2>
+        <p>已答 ${answeredCount} / ${exam.questions.length}</p>
+      </div>
+      <strong id="examTimer">${formatRemaining(exam.endsAt - Date.now())}</strong>
+    </div>
+    <div class="exam-layout">
+      <div class="panel question-shell">
+        <div class="question-top"><span>${escapeHtml(question.chapterName)}</span><span>第 ${exam.index + 1} 题</span></div>
+        <h3 class="question-title">${escapeHtml(question.question)}</h3>
+        <div class="options">
+          ${question.options
+            .map(
+              (option, index) => `
+            <label class="option ${selected === index ? "selected" : ""}">
+              <input type="radio" name="exam-answer-${question.id}" value="${index}" ${selected === index ? "checked" : ""}>
+              <span><strong>${LABELS[index]}.</strong> ${escapeHtml(option)}</span>
+            </label>
+          `
+            )
+            .join("")}
+        </div>
+        <div class="exam-actions">
+          <button class="button secondary" data-action="prev-exam" ${exam.index === 0 ? "disabled" : ""}>上一题</button>
+          <button class="button secondary" data-action="next-exam" ${exam.index + 1 === exam.questions.length ? "disabled" : ""}>下一题</button>
+          ${favoriteButton(question)}
+          <button class="button secondary" data-action="ai-explain" data-question-id="${question.id}">${aiActionLabel(question)}</button>
+          ${aiRedoButton(question)}
+          <button class="button" data-action="submit-exam">交卷</button>
+        </div>
+        ${renderAiPanel(question, selectedLabel(selected))}
+      </div>
+      <aside class="panel">
+        <h3>答题卡</h3>
+        <div class="answer-sheet">
+          ${exam.questions
+            .map(
+              (item, index) =>
+                `<button class="sheet-button ${exam.answers[item.id] !== undefined ? "answered" : ""} ${index === exam.index ? "current" : ""}" data-action="jump-exam" data-index="${index}">${index + 1}</button>`
+            )
+            .join("")}
+        </div>
+      </aside>
+    </div>
+  `;
+}
+
+function handleExamAnswer(input) {
+  const exam = state.exam;
+  if (!exam) return;
+  const question = exam.questions[exam.index];
+  exam.answers[question.id] = Number(input.value);
+  renderExam();
+}
+
+function submitExam() {
+  const exam = state.exam;
+  if (!exam || exam.submitted) return;
+  exam.submitted = true;
+  if (state.timer) clearInterval(state.timer);
+  let correct = 0;
+  const rows = exam.questions.map((question, index) => {
+    const selected = exam.answers[question.id];
+    const ok = selected === question.correct;
+    if (ok) correct += 1;
+    recordAnswer(question, ok, { selected });
+    return { question, index, selected, ok };
+  });
+  const rate = Math.round((correct / exam.questions.length) * 100);
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
+  $("#resultView").classList.add("active-view");
+  $("#resultView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>考试结果</h2>
+        <p>得分 ${correct} / ${exam.questions.length}，正确率 ${rate}%</p>
+      </div>
+      <button class="button" data-action="go-exam">再考一次</button>
+    </div>
+    <div class="result-list">
+      ${
+        rows
+          .filter((row) => !row.ok)
+          .map(
+            (row) => `
+        <div class="result-row">
+          <div>
+            <strong>第 ${row.index + 1} 题 · ${escapeHtml(row.question.chapterName)}</strong>
+            <p class="muted">${escapeHtml(row.question.question)}</p>
+            <p>你的答案：${selectedLabel(row.selected)} · 正确答案：${correctLabel(row.question)}</p>
+            ${row.question.formula ? `<div class="formula-box">${escapeHtml(row.question.formula)}</div>` : ""}
+          </div>
+          <button class="button secondary" data-action="start-single-review" data-question-id="${row.question.id}">重做</button>
+        </div>
+      `
+          )
+          .join("") || `<div class="empty">这次没有错题。</div>`
+      }
+    </div>
+  `;
+  updateGlobalStats();
+}
+
+function renderMistakes() {
+  const all = Object.keys(mistakes).map(questionById).filter(Boolean);
+  const chapterOptions = [{ id: 0, name: "全部章节" }, ...chapters];
+  $("#mistakesView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>错题本</h2>
+        <p>共 ${all.length} 道错题。答对后可以从错题本移出。</p>
+      </div>
+      <button class="button danger" data-action="clear-mistakes" ${all.length ? "" : "disabled"}>清空错题</button>
+    </div>
+    ${
+      all.length
+        ? `<div class="toolbar" style="margin-bottom:14px">
+            <div class="field">
+              <label for="mistakeChapter">章节筛选</label>
+              <select id="mistakeChapter">${chapterOptions.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select>
+            </div>
+            <button class="button" data-action="start-mistakes">开始重练</button>
+            <button class="button secondary" data-action="start-mistakes-flip">卡片复习</button>
+          </div>
+          <div class="result-list">
+            ${all
+              .map(
+                (question) => `
+              <div class="result-row">
+                <div>
+                  <strong>错 ${mistakes[question.id]?.wrongCount || 1} 次 · ${escapeHtml(question.chapterName)}</strong>
+                  <p class="muted">${escapeHtml(question.question)}</p>
+                </div>
+                <div class="mistake-row-actions">
+                  <button class="button secondary" data-action="start-single-review" data-question-id="${question.id}">做这题</button>
+                  ${favoriteButton(question)}
+                </div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>`
+        : `<div class="empty">暂时没有错题。选择题答错或卡片标记“不会”后会出现在这里。</div>`
+    }
+  `;
+}
+
+function startMistakePractice(mode = "choice") {
+  const chapter = Number($("#mistakeChapter")?.value || 0);
+  let pool = Object.keys(mistakes).map(questionById).filter(Boolean);
+  if (chapter) pool = pool.filter((q) => q.chapter === chapter);
+  startPractice(`错题重练 · ${chapter ? `第 ${chapter} 章` : "全部章节"}`, pool, { mode, removeOnCorrect: true, returnView: "mistakes", kind: "mistakes" });
+}
+
+function renderFavorites() {
+  const all = Object.keys(favorites).map(questionById).filter(Boolean);
+  const chapterOptions = [{ id: 0, name: "全部章节" }, ...chapters];
+  $("#favoritesView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>收藏题库</h2>
+        <p>共 ${all.length} 道收藏题，适合收公式、概念和易混点。</p>
+      </div>
+      <button class="button danger" data-action="clear-favorites" ${all.length ? "" : "disabled"}>清空收藏</button>
+    </div>
+    ${
+      all.length
+        ? `<div class="toolbar" style="margin-bottom:14px">
+            <div class="field">
+              <label for="favoriteChapter">章节筛选</label>
+              <select id="favoriteChapter">${chapterOptions.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select>
+            </div>
+            <button class="button" data-action="start-favorites">重做收藏</button>
+            <button class="button secondary" data-action="start-favorites-flip">卡片复习</button>
+          </div>
+          <div class="result-list">
+            ${all
+              .map(
+                (question) => `
+              <div class="result-row">
+                <div>
+                  <strong>${escapeHtml(question.chapterName)}</strong>
+                  <p class="muted">${escapeHtml(question.question)}</p>
+                </div>
+                <div class="mistake-row-actions">
+                  <button class="button secondary" data-action="start-single-favorite" data-question-id="${question.id}">做这题</button>
+                  <button class="button ghost" data-action="toggle-favorite" data-question-id="${question.id}">取消收藏</button>
+                </div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>`
+        : `<div class="empty">暂时没有收藏题。做题时点击“收藏”，题目就会出现在这里。</div>`
+    }
+  `;
+}
+
+function startFavoritePractice(mode = "choice") {
+  const chapter = Number($("#favoriteChapter")?.value || 0);
+  let pool = Object.keys(favorites).map(questionById).filter(Boolean);
+  if (chapter) pool = pool.filter((q) => q.chapter === chapter);
+  startPractice(`收藏重练 · ${chapter ? `第 ${chapter} 章` : "全部章节"}`, pool, { mode, returnView: "favorites", kind: "favorites" });
+}
+
+function searchQuestions(query) {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  return questions.filter((q) => {
+    const searchable = [q.question, q.explanation, q.formula, q.shortAnswer, q.chapterName, ...(q.tags || []), ...q.options].join(" ").toLocaleLowerCase();
+    return terms.every((term) => searchable.includes(term));
+  });
+}
+
+function renderSearch() {
+  const query = state.searchQuery.trim();
+  const results = searchQuestions(query);
+  $("#searchView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>搜索题目</h2>
+        <p>可以搜题干、解析、公式、章节名或标签。</p>
+      </div>
+    </div>
+    <div class="panel search-panel">
+      <div class="search-toolbar">
+        <div class="field">
+          <label for="searchInput">关键词</label>
+          <input id="searchInput" type="search" value="${escapeAttr(query)}" placeholder="例如：PN 结 费米能级">
+        </div>
+        <button class="button" data-action="run-search">搜索</button>
+      </div>
+    </div>
+    ${
+      query
+        ? `<div class="search-summary" style="margin-bottom:14px">找到 ${results.length} 道相关题目</div>
+           ${
+             results.length
+               ? `<div class="result-list">
+                  ${results
+                    .map(
+                      (question) => `
+                    <div class="result-row">
+                      <div>
+                        <strong>#${question.id} · ${escapeHtml(question.chapterName)}</strong>
+                        <p class="muted">${escapeHtml(question.question)}</p>
+                      </div>
+                      <div class="mistake-row-actions">
+                        <button class="button secondary" data-action="start-single-search" data-question-id="${question.id}">做这题</button>
+                        ${favoriteButton(question)}
+                      </div>
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>`
+               : `<div class="empty">没有找到相关题目。换一个更核心的关键词试试。</div>`
+           }`
+        : `<div class="empty">输入关键词开始搜索。</div>`
+    }
+  `;
+}
+
+function buildBackupPayload() {
+  const aiConfig = getAiConfig();
+  return {
+    app: "semiconductor-physics-quiz",
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    questionBank: { total: questions.length, chapters: chapters.length },
+    data: {
+      progress,
+      mistakes,
+      favorites,
+      aiConfig: { apiBase: aiConfig.apiBase, model: aiConfig.model, models: aiConfig.models },
+      aiCache: getAiCache(),
+      theme: localStorage.getItem(STORAGE.theme) || "day",
+    },
+  };
+}
+
+function applyBackupPayload(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("备份文件格式不正确。");
+  const data = payload.data && typeof payload.data === "object" ? payload.data : payload;
+  progress = sanitizeProgress(data.progress || data);
+  mistakes = sanitizeObject(data.mistakes);
+  favorites = sanitizeObject(data.favorites);
+  const importedAiConfig = sanitizeObject(data.aiConfig);
+  const currentAiConfig = getAiConfig();
+  saveAiConfig({
+    ...currentAiConfig,
+    apiBase: typeof importedAiConfig.apiBase === "string" ? importedAiConfig.apiBase : currentAiConfig.apiBase,
+    model: typeof importedAiConfig.model === "string" ? importedAiConfig.model : currentAiConfig.model,
+    models: Array.isArray(importedAiConfig.models) ? importedAiConfig.models.filter((item) => typeof item === "string") : currentAiConfig.models,
+    apiKey: currentAiConfig.apiKey,
+  });
+  saveAiCache(sanitizeObject(data.aiCache));
+  if (data.theme === "day" || data.theme === "night") setTheme(data.theme);
+  saveProgress();
+  saveMistakes();
+  saveFavorites();
+  state.aiStatus = {};
+  state.aiExpanded = {};
+}
+
+function renderBackup() {
+  const config = getBackupConfig();
+  $("#backupView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>数据备份</h2>
+        <p>备份学习进度、错题、收藏、XP、成就、AI 配置和解析缓存；AI key 与 GitHub token 不写进备份文件。</p>
+      </div>
+    </div>
+    <div class="grid backup-grid">
+      <section class="panel config-panel">
+        <h3>本地文件</h3>
+        <p class="muted">适合手动迁移，下载 JSON 后可在另一台设备导入。</p>
+        <div class="answer-actions" style="margin-top:14px">
+          <button class="button" data-action="export-backup">导出备份文件</button>
+          <label class="button secondary file-button" for="backupFile">导入备份文件</label>
+        </div>
+      </section>
+      <section class="panel config-panel">
+        <h3>GitHub Gist 同步</h3>
+        <p class="muted">GitHub token 需要 gist 权限，只保存在当前浏览器。</p>
+        <div class="grid setup-grid" style="margin-top:14px">
+          <div class="field"><label for="backupToken">GitHub token</label><input id="backupToken" type="password" value="${escapeAttr(config.token)}" placeholder="ghp_..."></div>
+          <div class="field"><label for="backupGistId">Gist ID</label><input id="backupGistId" value="${escapeAttr(config.gistId)}" placeholder="首次备份后自动生成"></div>
+          <div class="field"><label for="backupFilename">文件名</label><input id="backupFilename" value="${escapeAttr(config.filename)}"></div>
+        </div>
+        <div class="answer-actions" style="margin-top:14px">
+          <button class="button secondary" data-action="save-backup-config">保存 GitHub 配置</button>
+          <button class="button" data-action="backup-to-github">备份到 GitHub</button>
+          <button class="button secondary" data-action="restore-from-github">从 GitHub 导入</button>
+        </div>
+      </section>
+    </div>
+    <div class="panel backup-summary">
+      <strong>当前本地数据</strong>
+      <div class="chapter-meta" style="margin-top:10px">
+        <span class="pill">已刷 ${Object.keys(progress.answered).length}</span>
+        <span class="pill">错题 ${Object.keys(mistakes).length}</span>
+        <span class="pill">收藏 ${Object.keys(favorites).length}</span>
+        <span class="pill">AI 缓存 ${Object.keys(getAiCache()).length}</span>
+        <span class="pill">模型 ${getAiConfig().model || "未配置"}</span>
+      </div>
+      <div class="notice ${state.backupMessage ? "show" : ""}" style="margin-top:12px">${escapeHtml(state.backupMessage)}</div>
+    </div>
+  `;
+}
+
+function exportBackupFile() {
+  const payload = buildBackupPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `semiconductor-quiz-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  state.backupMessage = "备份文件已导出。";
+  renderBackup();
+}
+
+async function importBackupFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!window.confirm("导入会覆盖当前刷题数据，确定继续吗？")) {
+    input.value = "";
+    return;
+  }
+  try {
+    applyBackupPayload(JSON.parse(await file.text()));
+    state.backupMessage = "备份已导入。";
+  } catch (error) {
+    state.backupMessage = `导入失败：${error.message || String(error)}`;
+  }
+  input.value = "";
+  renderBackup();
+  updateGlobalStats();
+}
+
+function getBackupConfig() {
+  const saved = sanitizeObject(readJson(STORAGE.backupConfig, {}));
+  return {
+    token: typeof saved.token === "string" ? saved.token : "",
+    gistId: typeof saved.gistId === "string" ? saved.gistId : "",
+    filename: typeof saved.filename === "string" && saved.filename ? saved.filename : BACKUP_FILENAME,
+  };
+}
+
+function saveBackupConfig(config) {
+  writeJson(STORAGE.backupConfig, config);
+}
+
+function readBackupForm() {
+  const current = getBackupConfig();
+  return {
+    token: $("#backupToken")?.value || current.token,
+    gistId: ($("#backupGistId")?.value || current.gistId).trim(),
+    filename: ($("#backupFilename")?.value || current.filename || BACKUP_FILENAME).trim(),
+  };
+}
+
+function githubHeaders(token) {
+  return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" };
+}
+
+async function githubErrorMessage(response, actionName) {
+  let detail = "";
+  try {
+    const payload = await response.json();
+    detail = payload.message ? `（${payload.message}）` : "";
+  } catch {
+    detail = "";
+  }
+  if (response.status === 401) return `${actionName}失败：GitHub token 无效或已过期。${detail}`;
+  if (response.status === 403) return `${actionName}失败：token 权限不足，需要 gist 读写权限。${detail}`;
+  if (response.status === 404) return `${actionName}失败：没有找到这个 Gist，或 token 无权访问。${detail}`;
+  return `${actionName}失败：HTTP ${response.status}${detail}`;
+}
+
+async function backupToGithub() {
+  const config = readBackupForm();
+  if (!config.token) {
+    state.backupMessage = "请先填写 GitHub token。";
+    renderBackup();
+    return;
+  }
+  const filename = config.filename || BACKUP_FILENAME;
+  const body = {
+    description: "半导体物理刷题软件数据备份",
+    public: false,
+    files: { [filename]: { content: JSON.stringify(buildBackupPayload(), null, 2) } },
+  };
+  state.backupMessage = "正在备份到 GitHub...";
+  renderBackup();
+  try {
+    const url = config.gistId ? `https://api.github.com/gists/${config.gistId}` : "https://api.github.com/gists";
+    const response = await fetch(url, { method: config.gistId ? "PATCH" : "POST", headers: githubHeaders(config.token), body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(await githubErrorMessage(response, "GitHub 备份"));
+    const gist = await response.json();
+    saveBackupConfig({ ...config, gistId: gist.id, filename });
+    state.backupMessage = `已备份到 GitHub Gist：${gist.id}`;
+  } catch (error) {
+    state.backupMessage = explainNetworkError(error);
+  }
+  renderBackup();
+}
+
+async function restoreFromGithub() {
+  const config = readBackupForm();
+  if (!config.token || !config.gistId) {
+    state.backupMessage = "请填写 GitHub token 和 Gist ID。";
+    renderBackup();
+    return;
+  }
+  if (!window.confirm("从 GitHub 导入会覆盖当前刷题数据，确定继续吗？")) return;
+  state.backupMessage = "正在从 GitHub 导入...";
+  renderBackup();
+  try {
+    const response = await fetch(`https://api.github.com/gists/${config.gistId}`, { headers: githubHeaders(config.token) });
+    if (!response.ok) throw new Error(await githubErrorMessage(response, "GitHub 导入"));
+    const gist = await response.json();
+    const files = Object.values(gist.files || {});
+    const file = files.find((item) => item.filename === config.filename) || files[0];
+    if (!file?.content) throw new Error("Gist 中没有找到备份内容。");
+    applyBackupPayload(JSON.parse(file.content));
+    saveBackupConfig({ ...config, filename: file.filename || config.filename });
+    state.backupMessage = "已从 GitHub 导入备份。";
+  } catch (error) {
+    state.backupMessage = explainNetworkError(error);
+  }
+  renderBackup();
+}
+
+function getAiConfig() {
+  const saved = sanitizeObject(readJson(STORAGE.aiConfig, {}));
+  return {
+    apiBase: typeof saved.apiBase === "string" ? saved.apiBase : "https://gcli.ggchan.dev",
+    apiKey: typeof saved.apiKey === "string" ? saved.apiKey : "",
+    model: typeof saved.model === "string" ? saved.model : "",
+    models: Array.isArray(saved.models) ? saved.models.filter((model) => typeof model === "string") : [],
+  };
+}
+
+function saveAiConfig(config) {
+  writeJson(STORAGE.aiConfig, config);
+}
+
+function getAiCache() {
+  return sanitizeObject(readJson(STORAGE.aiCache, {}));
+}
+
+function saveAiCache(cache) {
+  writeJson(STORAGE.aiCache, cache);
+}
+
+function normalizeApiBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function buildApiUrl(apiBase, path) {
+  return `${normalizeApiBase(apiBase)}/${path.replace(/^\/+/, "")}`;
+}
+
+function renderConfigSafe() {
+  try {
+    renderConfig();
+  } catch (error) {
+    $("#configView").innerHTML = `<div class="empty">AI 配置页加载失败：${escapeHtml(error.message || String(error))}</div>`;
+  }
+}
+
+function renderConfig() {
+  const config = getAiConfig();
+  const cacheCount = Object.keys(getAiCache()).length;
+  $("#configView").innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>AI 配置</h2>
+        <p>API key 只保存在当前浏览器本地，不会写进题库文件、备份文件或 GitHub 仓库。</p>
+      </div>
+    </div>
+    <div class="panel config-panel">
+      <div class="grid setup-grid">
+        <div class="field"><label for="aiApiBase">API 地址</label><input id="aiApiBase" type="url" value="${escapeAttr(config.apiBase)}" placeholder="https://gcli.ggchan.dev"></div>
+        <div class="field"><label for="aiApiKey">API key</label><input id="aiApiKey" type="password" value="${escapeAttr(config.apiKey)}" placeholder="sk-..."></div>
+        <div class="field">
+          <label for="aiModel">模型</label>
+          <select id="aiModel">
+            <option value="">先拉取模型</option>
+            ${config.models.map((model) => `<option value="${escapeAttr(model)}" ${model === config.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="answer-actions" style="margin-top:14px">
+        <button class="button" data-action="fetch-models">拉取模型</button>
+        <button class="button secondary" data-action="save-ai-config">保存配置</button>
+        <button class="button secondary" data-action="clear-ai-cache">清除解析缓存（${cacheCount}）</button>
+        <button class="button ghost" data-action="clear-ai-config">清除配置</button>
+      </div>
+      <div class="notice ${state.configMessage ? "show" : ""}" style="margin-top:12px">${escapeHtml(state.configMessage)}</div>
+    </div>
+  `;
+}
+
+function readConfigForm() {
+  const current = getAiConfig();
+  return {
+    apiBase: normalizeApiBase($("#aiApiBase")?.value || current.apiBase),
+    apiKey: $("#aiApiKey")?.value || "",
+    model: $("#aiModel")?.value || current.model || "",
+    models: current.models || [],
+  };
+}
+
+async function fetchModels() {
+  const config = readConfigForm();
+  if (!config.apiBase || !config.apiKey) {
+    state.configMessage = "请先填写 API 地址和 key。";
+    renderConfigSafe();
+    return;
+  }
+  state.configMessage = "正在拉取模型...";
+  saveAiConfig(config);
+  renderConfigSafe();
+  try {
+    const response = await fetch(buildApiUrl(config.apiBase, "models"), { headers: { Authorization: `Bearer ${config.apiKey}` } });
+    if (!response.ok) throw new Error(`模型拉取失败：HTTP ${response.status}`);
+    const payload = await response.json();
+    const models = (payload.data || []).map((item) => item.id).filter(Boolean);
+    if (!models.length) throw new Error("没有在返回结果中找到模型 id。");
+    saveAiConfig({ ...config, models, model: models.includes(config.model) ? config.model : models[0] });
+    state.configMessage = `已拉取 ${models.length} 个模型，并保存配置。`;
+  } catch (error) {
+    state.configMessage = explainNetworkError(error);
+  }
+  renderConfigSafe();
+}
+
+function aiCacheKey(question, model) {
+  return `${model || "model"}:${question.id}`;
+}
+
+function aiStatusKey(question, model) {
+  return model ? aiCacheKey(question, model) : `unconfigured:${question.id}`;
+}
+
+function aiActionLabel(question) {
+  const config = getAiConfig();
+  const key = aiStatusKey(question, config.model);
+  const status = state.aiStatus[key] || {};
+  const cached = config.model ? getAiCache()[aiCacheKey(question, config.model)] : "";
+  if (status.loading) return "解析中...";
+  if (status.content || cached) return state.aiExpanded[key] ? "收起解析" : "展开解析";
+  return "AI 解析";
+}
+
+function aiRedoButton(question) {
+  const config = getAiConfig();
+  const status = state.aiStatus[aiStatusKey(question, config.model)] || {};
+  return `<button class="icon-button" data-action="redo-ai-explain" data-question-id="${question.id}" title="重新生成解析" aria-label="重新生成解析" ${status.loading ? "disabled" : ""}>↻</button>`;
+}
+
+function renderAiPanel(question, userAnswer) {
+  const config = getAiConfig();
+  const key = aiStatusKey(question, config.model);
+  const cache = getAiCache();
+  const status = state.aiStatus[key] || {};
+  const cached = config.model ? cache[aiCacheKey(question, config.model)] : "";
+  const content = status.content || cached || "";
+  const expanded = Boolean(state.aiExpanded[key]);
+  if (!status.loading && !status.error && (!content || !expanded)) return "";
+  const body = status.loading ? "正在请求 AI 解析..." : content || status.error || "";
+  const classes = ["ai-panel"];
+  if (status.error && !content) classes.push("error");
+  if (content) classes.push("ready");
+  return `
+    <section class="${classes.join(" ")}">
+      <div class="ai-panel-head">
+        <strong>AI 解析</strong>
+        <span>你的答案：${escapeHtml(userAnswer || "未作答")}</span>
+      </div>
+      ${status.error && content ? `<div class="notice show">${escapeHtml(status.error)}；已保留上次解析。</div>` : ""}
+      <div class="ai-content">${renderMarkdown(body)}</div>
+    </section>
+  `;
+}
+
+function buildPrompt(question, userAnswer) {
+  const options = question.options.map((text, index) => `${LABELS[index]}. ${text}`).join("\n");
+  return `课程：半导体器件物理
+章节：${question.chapterName}
+题目：${question.question}
+选项：
+${options}
+正确答案：${correctLabel(question)}. ${question.options[question.correct] || ""}
+公式：${question.formula || "无"}
+题库解析：${question.explanation || "无"}
+用户答案或自评：${userAnswer || "未作答"}
+
+请用严谨的半导体物理语言解释这道题：先说明正确答案，再解释关键物理概念或公式含义，最后给出适合考前复习的一句话记忆提示。`;
+}
+
+function renderActiveQuestion() {
+  if ($("#practiceView").classList.contains("active-view")) renderPractice();
+  if ($("#examView").classList.contains("active-view")) renderExam();
+}
+
+async function requestAiExplanation(questionId, options = {}) {
+  const question = questionById(questionId);
+  if (!question) return;
+  const config = getAiConfig();
+  const statusKey = aiStatusKey(question, config.model);
+  const cacheKey = aiCacheKey(question, config.model);
+  const cache = getAiCache();
+  const currentStatus = state.aiStatus[statusKey] || {};
+  if (currentStatus.loading) return;
+
+  if (!options.force && (cache[cacheKey] || currentStatus.content)) {
+    state.aiExpanded[statusKey] = !state.aiExpanded[statusKey];
+    renderActiveQuestion();
+    return;
+  }
+
+  if (!config.apiBase || !config.apiKey || !config.model) {
+    state.aiStatus[statusKey] = { error: "请先到“AI 配置”填写 API 地址、key，并选择模型。" };
+    state.aiExpanded[statusKey] = true;
+    renderActiveQuestion();
+    return;
+  }
+
+  const userAnswer = currentUserAnswer(question);
+  state.aiExpanded[statusKey] = true;
+  state.aiStatus[statusKey] = { loading: true, content: options.force ? currentStatus.content || cache[cacheKey] || "" : "" };
+  renderActiveQuestion();
+
+  try {
+    const response = await fetch(buildApiUrl(config.apiBase, "chat/completions"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          { role: "system", content: "你是一名严谨的模拟 IC 与半导体器件物理助教，解释要准确、分层、适合复习。" },
+          { role: "user", content: buildPrompt(question, userAnswer) },
+        ],
+        temperature: 0.2,
+      }),
+    });
+    if (!response.ok) throw new Error(`AI 请求失败：HTTP ${response.status}`);
+    const payload = await response.json();
+    const content = payload.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new Error("AI 返回为空。");
+    cache[cacheKey] = content;
+    saveAiCache(cache);
+    state.aiStatus[statusKey] = { content };
+  } catch (error) {
+    state.aiStatus[statusKey] = { error: explainNetworkError(error), content: cache[cacheKey] || currentStatus.content || "" };
+  }
+  renderActiveQuestion();
+}
+
+function currentUserAnswer(question) {
+  if (state.exam && $("#examView").classList.contains("active-view")) return selectedLabel(state.exam.answers[question.id]);
+  if (state.practice?.questions[state.practice.index]?.id === question.id) {
+    const record = getPracticeRecord(question);
+    return state.practice.mode === "flip" ? record.selfEval || "未自评" : selectedLabel(record.selected);
+  }
+  return "未作答";
+}
+
+function explainNetworkError(error) {
+  const message = error?.message || String(error);
+  if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "请求失败：浏览器可能被 CORS 拦截，或 API 地址不可访问。";
+  return message;
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>");
+}
+
+function renderMarkdown(value) {
+  const lines = String(value || "").replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let listType = "";
+  const closeList = () => {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = "";
+    }
+  };
+  const openList = (type) => {
+    if (listType !== type) {
+      closeList();
+      listType = type;
+      html.push(`<${type}>`);
+    }
+  };
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      return;
+    }
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (unordered) {
+      openList("ul");
+      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      return;
+    }
+    const ordered = trimmed.match(/^\d+[.)、]\s+(.+)$/);
+    if (ordered) {
+      openList("ol");
+      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      return;
+    }
+    closeList();
+    html.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+  });
+  closeList();
+  return html.join("");
+}
+
+function setTheme(theme) {
+  if (theme === "night") document.documentElement.setAttribute("data-theme", "night");
+  else document.documentElement.removeAttribute("data-theme");
+  localStorage.setItem(STORAGE.theme, theme);
+  if (state.view === "home") renderHome();
 }
 
 function loadTheme() {
-  const saved = localStorage.getItem('semiquiz_theme');
-  if (saved) setTheme(saved);
-}
-
-// ===== UI 控制 =====
-function toggleMenu() {
-  const controls = document.getElementById('topControls');
-  const toggle = document.getElementById('menuToggle');
-  controls.classList.toggle('open');
-  toggle.textContent = controls.classList.contains('open') ? '✕' : '☰';
-}
-
-function toggleSettings() {
-  const overlay = document.getElementById('settingsOverlay');
-  overlay.classList.toggle('open');
-  if (overlay.classList.contains('open')) {
-    populateSettingsFilters();
-  }
-}
-
-function populateSettingsFilters() {
-  const mainFilter = document.getElementById('chapterFilter');
-  const settingsFilter = document.getElementById('chapterFilterSettings');
-  settingsFilter.innerHTML = mainFilter.innerHTML;
-  settingsFilter.value = mainFilter.value;
-  document.getElementById('modeFilterSettings').value = document.getElementById('modeFilter').value;
-  document.getElementById('themeSelect').value = currentTheme;
-}
-
-function togglePanel() {
-  document.getElementById('sidePanel').classList.toggle('open');
-  updateTodaySummary();
-}
-
-// ===== 数据管理 =====
-function exportData() {
-  try {
-    const data = localStorage.getItem('semiquiz_data');
-    if (!data) { showToast('⚠️ 没有可导出的数据'); return; }
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const today = new Date().toISOString().slice(0, 10);
-    a.download = '半导体物理_学习数据_' + today + '.json';
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('✅ 数据导出成功');
-  } catch (e) { showToast('⚠️ 导出失败：' + e.message); }
-}
-
-function importData(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    try {
-      const data = JSON.parse(e.target.result);
-      localStorage.setItem('semiquiz_data', JSON.stringify(data));
-      location.reload();
-    } catch (err) { showToast('⚠️ 文件格式错误，请选择正确的备份文件'); }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
+  const saved = localStorage.getItem(STORAGE.theme) || localStorage.getItem(LEGACY_THEME_KEY) || "day";
+  setTheme(saved === "night" ? "night" : "day");
 }
 
 function resetData() {
-  if (!confirm('⚠️ 确定要重置所有学习数据吗？\n\n此操作将清除：\n· 所有答题记录\n· XP 经验值和等级\n· 成就和错题本\n· 学习日历和统计数据\n\n建议先导出数据备份！')) return;
-  if (!confirm('🚨 再次确认：重置后将丢失全部学习进度，此操作不可撤销！\n\n确定要继续吗？')) return;
-  localStorage.removeItem('semiquiz_data');
-  showToast('🗑️ 数据已重置，即将刷新页面');
-  setTimeout(() => location.reload(), 1000);
+  if (!window.confirm("确定要重置所有学习数据吗？建议先导出备份。")) return;
+  if (!window.confirm("再次确认：重置后将丢失全部学习进度，此操作不可撤销。")) return;
+  [STORAGE.progress, STORAGE.mistakes, STORAGE.favorites, STORAGE.aiCache].forEach((key) => localStorage.removeItem(key));
+  progress = { answered: {}, xp: 0, level: 1, achievements: {}, studyLog: {} };
+  mistakes = {};
+  favorites = {};
+  checkIn();
+  showToast("学习数据已重置。");
+  showView("home");
 }
 
-// ===== 快捷键 =====
-document.addEventListener('keydown', function (e) {
-  if (e.target.tagName === 'INPUT') return;
-  if (e.key === 'ArrowLeft') navigate(-1);
-  else if (e.key === 'ArrowRight') navigate(1);
-  else if (e.key === 'f' || e.key === 'F') flipCard();
-  else if (e.key === '1') { const btns = document.querySelectorAll('.option-btn:not(.disabled)'); if (btns[0]) btns[0].click(); }
-  else if (e.key === '2') { const btns = document.querySelectorAll('.option-btn:not(.disabled)'); if (btns[1]) btns[1].click(); }
-  else if (e.key === '3') { const btns = document.querySelectorAll('.option-btn:not(.disabled)'); if (btns[2]) btns[2].click(); }
-  else if (e.key === '4') { const btns = document.querySelectorAll('.option-btn:not(.disabled)'); if (btns[3]) btns[3].click(); }
-});
-
-// ===== 工具函数 =====
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+function showToast(message) {
+  const toast = $("#toast");
+  toast.textContent = message;
+  toast.classList.add("show");
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
 function spawnConfetti() {
-  const colors = ['#4CAF50', '#FFD700', '#FF5722', '#2196F3', '#E91E63', '#9C27B0'];
-  for (let i = 0; i < 30; i++) {
-    const el = document.createElement('div');
-    el.className = 'confetti-piece';
-    el.style.left = Math.random() * 100 + 'vw';
-    el.style.top = Math.random() * 50 + 20 + 'vh';
-    el.style.background = colors[Math.floor(Math.random() * colors.length)];
-    el.style.width = (Math.random() * 8 + 4) + 'px';
-    el.style.height = (Math.random() * 8 + 4) + 'px';
-    el.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
-    el.style.animationDuration = (Math.random() * 1 + 0.8) + 's';
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 2000);
+  const colors = ["#24786c", "#ffd166", "#2f5f98", "#b42318", "#66c2a5"];
+  for (let i = 0; i < 24; i += 1) {
+    const piece = document.createElement("div");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}vw`;
+    piece.style.top = `${Math.random() * 42 + 22}vh`;
+    piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.width = `${Math.random() * 8 + 4}px`;
+    piece.style.height = `${Math.random() * 8 + 4}px`;
+    piece.style.borderRadius = Math.random() > 0.5 ? "50%" : "2px";
+    piece.style.animationDuration = `${Math.random() * 0.8 + 0.8}s`;
+    document.body.appendChild(piece);
+    setTimeout(() => piece.remove(), 1800);
   }
 }
 
-// ===== 启动 =====
+function bindEvents() {
+  document.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-action]");
+    if (!target) return;
+    const action = target.dataset.action;
+    if (action === "go-chapter") showView("chapter");
+    if (action === "go-exam") showView("exam");
+    if (action === "go-mistakes") showView("mistakes");
+    if (action === "go-favorites") showView("favorites");
+    if (action === "go-search") showView("search");
+    if (action === "go-backup") showView("backup");
+    if (action === "go-config") showView("config");
+    if (action === "set-theme") setTheme(target.dataset.theme);
+    if (action === "start-chapter") startChapterPractice(Number(target.dataset.chapter), target.dataset.mode);
+    if (action === "back-practice") showView(state.practice?.returnView || "chapter");
+    if (action === "set-practice-mode") {
+      state.practice.mode = target.dataset.mode;
+      state.practice.flipped = false;
+      renderPractice();
+    }
+    if (action === "check-practice") checkPracticeAnswer();
+    if (action === "prev-practice") prevPractice();
+    if (action === "next-practice") nextPractice();
+    if (action === "flip-card") {
+      state.practice.flipped = !state.practice.flipped;
+      if (state.practice.flipped) addXP(1);
+      saveProgress();
+      renderPractice();
+    }
+    if (action === "self-eval") selfEval(target.dataset.level);
+    if (action === "toggle-favorite") toggleFavorite(questionById(target.dataset.questionId));
+    if (action === "start-exam") startExam();
+    if (action === "prev-exam" && state.exam?.index > 0) {
+      state.exam.index -= 1;
+      renderExam();
+    }
+    if (action === "next-exam" && state.exam?.index + 1 < state.exam.questions.length) {
+      state.exam.index += 1;
+      renderExam();
+    }
+    if (action === "jump-exam") {
+      state.exam.index = Number(target.dataset.index);
+      renderExam();
+    }
+    if (action === "submit-exam") submitExam();
+    if (action === "clear-mistakes" && window.confirm("确定清空错题本吗？")) {
+      mistakes = {};
+      saveMistakes();
+      renderMistakes();
+      updateGlobalStats();
+    }
+    if (action === "start-mistakes") startMistakePractice("choice");
+    if (action === "start-mistakes-flip") startMistakePractice("flip");
+    if (action === "start-single-review") {
+      const question = questionById(target.dataset.questionId);
+      if (question) startPractice("单题重练", [question], { removeOnCorrect: true, returnView: "mistakes" });
+    }
+    if (action === "clear-favorites" && window.confirm("确定清空收藏题库吗？")) {
+      favorites = {};
+      saveFavorites();
+      renderFavorites();
+      updateGlobalStats();
+    }
+    if (action === "start-favorites") startFavoritePractice("choice");
+    if (action === "start-favorites-flip") startFavoritePractice("flip");
+    if (action === "start-single-favorite" || action === "start-single-search") {
+      const question = questionById(target.dataset.questionId);
+      if (question) startPractice("单题练习", [question], { returnView: action === "start-single-search" ? "search" : "favorites" });
+    }
+    if (action === "run-search") {
+      state.searchQuery = $("#searchInput")?.value || "";
+      renderSearch();
+    }
+    if (action === "export-backup") exportBackupFile();
+    if (action === "save-backup-config") {
+      saveBackupConfig(readBackupForm());
+      state.backupMessage = "GitHub 配置已保存。";
+      renderBackup();
+    }
+    if (action === "backup-to-github") backupToGithub();
+    if (action === "restore-from-github") restoreFromGithub();
+    if (action === "fetch-models") fetchModels();
+    if (action === "save-ai-config") {
+      saveAiConfig(readConfigForm());
+      state.configMessage = "配置已保存。";
+      renderConfigSafe();
+    }
+    if (action === "clear-ai-cache" && window.confirm("确定清除 AI 解析缓存吗？")) {
+      saveAiCache({});
+      state.configMessage = "解析缓存已清除。";
+      renderConfigSafe();
+    }
+    if (action === "clear-ai-config" && window.confirm("确定清除 AI 配置吗？")) {
+      localStorage.removeItem(STORAGE.aiConfig);
+      state.configMessage = "AI 配置已清除。";
+      renderConfigSafe();
+    }
+    if (action === "ai-explain") requestAiExplanation(target.dataset.questionId);
+    if (action === "redo-ai-explain") requestAiExplanation(target.dataset.questionId, { force: true });
+    if (action === "show-study-panel") showView("home");
+  });
+
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (input.matches('input[name^="exam-answer-"]')) handleExamAnswer(input);
+    if (input.id === "backupFile") importBackupFile(input);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
+    if ($("#practiceView").classList.contains("active-view")) {
+      if (event.key === "ArrowLeft") prevPractice();
+      if (event.key === "ArrowRight") nextPractice();
+      if (event.key.toLowerCase() === "f" && state.practice?.mode === "flip") {
+        state.practice.flipped = !state.practice.flipped;
+        renderPractice();
+      }
+      if (/^[1-6]$/.test(event.key)) {
+        const input = document.querySelector(`input[name^="practice-answer-"][value="${Number(event.key) - 1}"]`);
+        if (input && !input.disabled) input.checked = true;
+      }
+    }
+  });
+
+  $("#mobileMenuButton").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
+  document.querySelectorAll(".nav-button").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
+}
+
+setInterval(() => {
+  if (progress.studyLog[todayStr]) {
+    progress.studyLog[todayStr].time = (progress.studyLog[todayStr].time || 0) + 1;
+    saveProgress();
+    if (state.view === "home") renderHome();
+  }
+}, 60000);
+
 init();

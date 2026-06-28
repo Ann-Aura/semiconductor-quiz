@@ -1,181 +1,72 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>半导体器件物理 · 刷题</title>
-<link rel="stylesheet" href="style.css">
-</head>
-<body>
-<div class="top-bar">
-  <div class="top-bar-row">
-    <button class="menu-toggle" id="menuToggle" onclick="toggleMenu()" aria-label="展开菜单">☰</button>
-    <div class="logo">📘 <span>半导体器件物理</span> · 刷题</div>
-    <button class="icon-btn settings-btn" onclick="toggleSettings()" aria-label="设置">⚙️</button>
-  </div>
-  <div class="controls" id="topControls">
-    <button class="mode-btn active" data-mode="choice" onclick="setMode('choice')">📝 选择题</button>
-    <button class="mode-btn" data-mode="flip" onclick="setMode('flip')">🔄 卡片翻转</button>
-    <select id="chapterFilter" onchange="applyFilters()">
-      <option value="0">📂 全部章节</option>
-    </select>
-    <select id="modeFilter" onchange="applyFilters()">
-      <option value="sequential">📋 顺序刷题</option>
-      <option value="random">🎲 随机抽题</option>
-      <option value="wrong">📕 错题优先</option>
-    </select>
-    <div class="search-box">
-      <input type="text" id="searchInput" placeholder="🔍 搜索题目..." oninput="onSearch()">
-      <div class="search-results" id="searchResults"></div>
-    </div>
-  </div>
-</div>
-
-<div class="progress-bar-wrap">
-  <div class="info">
-    <span class="stat">📊 进度 <span class="num" id="progressNum">0/300</span></span>
-    <span class="stat">✅ 正确 <span class="num" id="correctNum">0</span></span>
-    <span class="stat">📈 正确率 <span class="num" id="rateNum">0%</span></span>
-    <span class="stat gamification">
-      <span class="level-badge" id="levelBadge">Lv.1</span>
-      <div class="xp-bar"><div class="fill" id="xpFill" style="width:0%"></div></div>
-      <span id="xpText" style="font-size:.85em">0 XP</span>
-    </span>
-  </div>
-  <div class="progress-bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
-</div>
-
-<div class="main" id="mainContent">
-  <div class="card welcome-card fade-in" id="welcomeCard">
-    <div class="welcome-icon">📘</div>
-    <h2>半导体器件物理</h2>
-    <p class="welcome-desc">欢迎回来，萧安！今天也要加油学习哦 💪</p>
-    <div class="welcome-info">
-      <span id="welcomeTotal">📚 题库加载中...</span>
-      <span id="welcomeChapter">📂 全部章节</span>
-    </div>
-    <button class="welcome-btn" onclick="startLearning()">🎯 开始学习</button>
-  </div>
-  <div class="card fade-in" id="questionCard" style="display:none">
-    <div class="q-header">
-      <span class="q-num" id="qNum">第 1 题</span>
-      <span id="qChapter" style="color:var(--text2)">加载中...</span>
-    </div>
-    <div class="q-text" id="qText">加载题库中...</div>
-
-    <div id="choiceArea">
-      <div class="options" id="optionsContainer"></div>
-      <div class="feedback" id="feedback">
-        <div class="fb-title" id="fbTitle"></div>
-        <div class="fb-formula" id="fbFormula"></div>
-        <div class="fb-explanation" id="fbExplanation"></div>
-      </div>
-    </div>
-
-    <div id="flipArea" style="display:none">
-      <div class="flip-card" id="flipCard">
-        <div class="flip-card-inner">
-          <div class="flip-card-front">
-            <div class="q-text" id="flipQText"></div>
-            <div class="flip-hint" onclick="flipCard()">🤔 点击翻转 · 查看答案</div>
-          </div>
-          <div class="flip-card-back">
-            <div class="answer-label">📌 答案要点</div>
-            <div class="answer-text" id="flipAnswer"></div>
-            <div class="fb-formula" id="flipFormula"></div>
-            <div class="fb-explanation" id="flipExplanation"></div>
-            <div class="self-eval">
-              <span style="font-size:.85em;color:var(--text2);margin-right:4px">自评：</span>
-              <button class="easy" onclick="selfEval('easy')">😊 会了</button>
-              <button class="medium" onclick="selfEval('medium')">🤔 模糊</button>
-              <button class="hard" onclick="selfEval('hard')">😵 不会</button>
-            </div>
-            <div class="nav-buttons" style="margin-top:16px">
-              <button onclick="navigate(-1)">◀ 上一题</button>
-              <button onclick="navigate(1)">下一题 ▶</button>
-            </div>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>半导体器件物理 · 刷题</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <button class="mobile-menu-button" id="mobileMenuButton" aria-label="展开导航">☰</button>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="brand-mark">Si</div>
+          <div>
+            <h1>半导体物理刷题</h1>
+            <p id="bankMeta">题库加载中...</p>
           </div>
         </div>
-      </div>
+
+        <nav class="nav-tabs" aria-label="主导航">
+          <button class="nav-button active" data-view="home">首页</button>
+          <button class="nav-button" data-view="chapter">章节刷题</button>
+          <button class="nav-button" data-view="exam">随机考试</button>
+          <button class="nav-button" data-view="mistakes">错题本</button>
+          <button class="nav-button" data-view="favorites">收藏题库</button>
+          <button class="nav-button" data-view="search">搜索题目</button>
+          <button class="nav-button" data-view="backup">数据备份</button>
+          <button class="nav-button" data-view="config">AI 配置</button>
+        </nav>
+
+        <div class="mini-stats">
+          <div>
+            <span id="statTotal">0</span>
+            <small>总题数</small>
+          </div>
+          <div>
+            <span id="statMistakes">0</span>
+            <small>错题</small>
+          </div>
+          <div>
+            <span id="statFavorites">0</span>
+            <small>收藏</small>
+          </div>
+          <div>
+            <span id="statLevel">Lv.1</span>
+            <small>等级</small>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <section id="homeView" class="view active-view"></section>
+        <section id="chapterView" class="view"></section>
+        <section id="practiceView" class="view"></section>
+        <section id="examView" class="view"></section>
+        <section id="mistakesView" class="view"></section>
+        <section id="favoritesView" class="view"></section>
+        <section id="searchView" class="view"></section>
+        <section id="backupView" class="view"></section>
+        <section id="configView" class="view"></section>
+        <section id="resultView" class="view"></section>
+      </main>
     </div>
 
-    <div class="nav-buttons">
-      <button id="prevBtn" onclick="navigate(-1)">◀ 上一题</button>
-      <button id="nextBtn" onclick="navigate(1)">下一题 ▶</button>
-    </div>
-  </div>
-</div>
+    <input class="hidden-file" id="backupFile" type="file" accept="application/json,.json">
+    <div class="toast" id="toast"></div>
 
-<button class="panel-toggle" onclick="togglePanel()" title="学习统计">📊</button>
-
-<div class="side-panel" id="sidePanel">
-  <button class="close-panel" onclick="togglePanel()">✕</button>
-  <div class="panel-section">
-    <h3>📅 学习日历</h3>
-    <div id="calendarContainer"></div>
-  </div>
-  <div class="panel-section">
-    <h3>📋 今日总结</h3>
-    <div id="todaySummary">
-      <div class="summary-item"><span class="label">答题</span><span class="value" id="sTodayCount">0 题</span></div>
-      <div class="summary-item"><span class="label">正确</span><span class="value" id="sTodayCorrect">0 题</span></div>
-      <div class="summary-item"><span class="label">正确率</span><span class="value" id="sTodayRate">0%</span></div>
-      <div class="summary-item"><span class="label">新增错题</span><span class="value" id="sTodayWrong">0 题</span></div>
-      <div class="summary-item"><span class="label">学习时长</span><span class="value" id="sTodayTime">0 分钟</span></div>
-    </div>
-  </div>
-  <div class="panel-section">
-    <h3>🏆 成就</h3>
-    <div class="achievements" id="achievementList"></div>
-  </div>
-  <div class="panel-section">
-    <h3>📕 错题本 (<span id="wrongCount">0</span>)</h3>
-    <ul class="wrong-list" id="wrongList">
-      <li style="color:var(--text2);text-align:center;padding:20px">暂无错题，继续加油！</li>
-    </ul>
-  </div>
-</div>
-
-<div class="settings-overlay" id="settingsOverlay" onclick="toggleSettings()">
-  <div class="settings-panel" onclick="event.stopPropagation()">
-    <div class="settings-header">
-      <h3>⚙️ 设置</h3>
-      <button class="close-btn" onclick="toggleSettings()">✕</button>
-    </div>
-    <div class="settings-body">
-      <div class="setting-group">
-        <label class="setting-label">📂 章节筛选</label>
-        <select id="chapterFilterSettings" onchange="applyFilterFromSettings()"></select>
-      </div>
-      <div class="setting-group">
-        <label class="setting-label">📋 刷题模式</label>
-        <select id="modeFilterSettings" onchange="applyFilterFromSettings()">
-          <option value="sequential">顺序刷题</option>
-          <option value="random">随机抽题</option>
-          <option value="wrong">错题优先</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label class="setting-label">🎨 主题模式</label>
-        <select id="themeSelect" onchange="setTheme(this.value)">
-          <option value="day">☀️ 白天模式</option>
-          <option value="night">🌙 夜晚护眼模式</option>
-        </select>
-      </div>
-      <div class="setting-group">
-        <label class="setting-label">📊 数据管理</label>
-        <button class="settings-action-btn" onclick="exportData()">📤 导出学习数据</button>
-        <button class="settings-action-btn" onclick="document.getElementById('importInput').click()">📥 导入学习数据</button>
-        <input type="file" id="importInput" accept=".json" style="display:none" onchange="importData(event)">
-        <button class="settings-action-btn" onclick="resetData()" style="border-color:var(--danger);color:var(--danger);margin-top:8px">🗑️ 一键重置</button>
-        <p style="font-size:.8em;color:var(--text2);margin-top:8px">导出后换设备或重装时可导入恢复数据</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script src="app.js"></script>
-</body>
+    <script src="data/questions.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>
