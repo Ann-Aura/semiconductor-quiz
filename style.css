@@ -138,11 +138,83 @@ button {
   color: #fff;
 }
 
+.version-card {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+  padding: 14px;
+  border: 1px solid rgba(213, 240, 230, 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(213, 240, 230, 0.13), rgba(47, 95, 152, 0.12)),
+    rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.version-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.version-card-head span,
+.update-note > span {
+  color: #a9d8cf;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.version-card-head strong {
+  color: #fff;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.version-card p {
+  margin: 0;
+  color: #dbe3ee;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.feature-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feature-pills span {
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef5f2;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.update-note {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.update-note ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 16px;
+  color: #dbe3ee;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .mini-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: auto;
 }
 
 .mini-stats div {

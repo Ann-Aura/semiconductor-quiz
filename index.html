@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>半导体器件物理 · 刷题</title>
-  <link rel="stylesheet" href="style.css?v=20260628-ai-mode-split">
+  <link rel="stylesheet" href="style.css?v=20260628-sidebar-version">
   </head>
   <body>
     <button class="mobile-menu-button" id="mobileMenuButton" aria-label="展开导航">☰</button>
@@ -28,6 +28,30 @@
           <button class="nav-button" data-view="backup">数据备份</button>
           <button class="nav-button" data-view="config">AI 配置</button>
         </nav>
+
+        <section class="version-card" aria-label="版本与更新">
+          <div class="version-card-head">
+            <span>当前版本</span>
+            <strong>v2026.06.28</strong>
+          </div>
+          <p>保研面试题库版 · 选择题追问 + 原题卡片双轨复习</p>
+          <div class="feature-pills" aria-label="已有功能">
+            <span>章节刷题</span>
+            <span>随机考试</span>
+            <span>错题收藏</span>
+            <span>AI 追问</span>
+            <span>Gist 备份</span>
+            <span>续练恢复</span>
+          </div>
+          <div class="update-note">
+            <span>此次更新</span>
+            <ul>
+              <li>翻转卡片恢复原题库题干与短答</li>
+              <li>AI 解析按选择题/卡片模式分开</li>
+              <li>首页继续答题入口与导航修复</li>
+            </ul>
+          </div>
+        </section>
 
         <div class="mini-stats">
           <div>
@@ -66,7 +90,7 @@
     <input class="hidden-file" id="backupFile" type="file" accept="application/json,.json">
     <div class="toast" id="toast"></div>
 
-  <script src="data/questions.js?v=20260628-ai-mode-split"></script>
-  <script src="app.js?v=20260628-ai-mode-split"></script>
+  <script src="data/questions.js?v=20260628-sidebar-version"></script>
+  <script src="app.js?v=20260628-sidebar-version"></script>
   </body>
 </html>
